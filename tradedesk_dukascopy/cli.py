@@ -108,3 +108,5 @@ def main(argv: list[str] | None = None) -> int:
     
     if output_csv is not None:
         write_sidecar(meta, output_csv)
+
+    return 0

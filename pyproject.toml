@@ -28,6 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+  "pytest>=9.0",
+  "pytest-cov>=7.0",
+]
 parquet = ["pyarrow>=16.1"]
 
 [project.scripts]
@@ -42,8 +46,24 @@ Issues = "https://github.com/radiusred/tradedesk-dukascopy/issues"
 packages = ["tradedesk_dukascopy"]
 
 [tool.pytest.ini_options]
-addopts = "-q"
 testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["tradedesk_dukascopy"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
 
 [tool.ruff]
 line-length = 100
