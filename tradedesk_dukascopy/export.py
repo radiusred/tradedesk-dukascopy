@@ -148,10 +148,15 @@ def _probe_price_format(compressed: bytes) -> str:
       - interpret ask/bid as float32: if non-finite OR absurdly small (subnormal/near-zero)
         then treat as int32.
     """
-    with lzma.open(io.BytesIO(compressed), "rb") as f:
-        first = f.read(20)
-    if len(first) < 20:
-        raise ValueError("bi5 too short to probe")
+    try:
+        with lzma.open(io.BytesIO(compressed), "rb") as f:
+            first = f.read(20)
+
+        if len(first) < 20:
+            raise ValueError("bi5 too short to probe")
+        
+    except EOFError as e:
+        raise ValueError("Not enough decompressed bytes to probe tick format") from e
 
     # float layout: >i f f f f
     ms, ask_f, bid_f, ask_v, bid_v = struct.unpack(">i f f f f", first)
