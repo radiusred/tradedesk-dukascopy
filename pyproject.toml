@@ -39,7 +39,7 @@ Repository = "https://github.com/radiusred/tradedesk-dukascopy"
 Issues = "https://github.com/radiusred/tradedesk-dukascopy/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tradedesk_dukascopy"]
+packages = ["tradedesk_dukascopy"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
