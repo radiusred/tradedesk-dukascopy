@@ -1,10 +1,12 @@
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 
+log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ExportMetadata:
     schema_version: str
@@ -16,12 +18,11 @@ class ExportMetadata:
     generated_at: str
     params: dict[str, Any]
 
-
 def now_iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-
-def write_sidecar(meta: ExportMetadata, output_path: Path) -> Path:
-    sidecar = Path(str(output_path) + ".meta.json")
+def write_sidecar(meta: ExportMetadata, outputfile: Path) -> Path:
+    sidecar = outputfile.with_suffix(outputfile.suffix + ".meta.json")
     sidecar.write_text(json.dumps(asdict(meta), indent=2, sort_keys=True) + "\n")
+    log.info(f"Wrote metadata sidecar: {sidecar}")
     return sidecar
