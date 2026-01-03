@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tradedesk-dukascopy"
+version = "0.1.0"
+description = "Dukascopy tick downloader and candle/tick exporter for backtesting workflows."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICEN[CS]E*"]
+authors = [
+  { name = "Radius Red Ltd.", email = "opensource@radiusred.co.uk" }
+]
+maintainers = [
+  { name = "Radius Red Ltd.", email = "opensource@radiusred.co.uk" }
+]
+keywords = ["dukascopy", "ticks", "candles", "backtesting", "trading"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache 2.0 License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "requests>=2.32",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+parquet = ["pyarrow>=16.1"]
+
+[project.scripts]
+tradedesk-dc-export = "tradedesk_dukascopy.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/radiusred"
+Repository = "https://github.com/radiusred/tradedesk-dukascopy"
+Issues = "https://github.com/radiusred/tradedesk-dukascopy/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tradedesk_dukascopy"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
