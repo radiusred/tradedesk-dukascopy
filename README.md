@@ -1,32 +1,125 @@
 # tradedesk-dukascopy
 
-Utilities to export Dukascopy tick data into backtest-ready datasets.
+Dukascopy tick downloader and candle exporter for backtesting workflows.
 
-## Install
+This tool downloads raw tick data from Dukascopy, converts it into clean,
+deterministic CSV candle files, and writes a metadata sidecar describing exactly
+how the data was produced.
+
+It is designed to be run once per dataset, not repeatedly during backtests.
+
+---
+
+## Quick start
+
+Install:
 
 ```bash
 pip install tradedesk-dukascopy
 ```
 
-## CLI
-
-Export candles (default):
+Export 5-minute candles for EURUSD:
 
 ```bash
-tradedesk-dc-export --symbol EURUSD --from 2024-01-01 --to 2024-01-31 --resample 5min --out eurusd_5m.csv
+tradedesk-dc-export   --symbol EURUSD   --from 2025-01-01   --to 2025-01-31   --out data   --price-divisor 100000
 ```
 
-Export ticks:
+This produces:
+
+```text
+data/
+  EURUSD_5MIN.csv
+  EURUSD_5MIN.csv.meta.json
+```
+
+You can now point your backtest engine at the CSV file directly.
+
+---
+
+## Output files
+
+### Candle CSV
+
+The CSV file contains OHLCV candles with timestamps in UTC (ISO-8601):
+
+```text
+timestamp,open,high,low,close,volume
+2025-01-01T00:00:00+00:00,1.10342,1.10361,1.10311,1.10355,1234.0
+```
+
+- Timestamps are always **UTC**
+- Prices are floats **after applying the price divisor**
+- Volume is derived from tick volume (bid / ask / mid, depending on settings)
+
+### Metadata sidecar (`.meta.json`)
+
+Every CSV is accompanied by a metadata file describing how it was generated:
+
+```json
+{
+  "schema_version": "1",
+  "source": "dukascopy",
+  "symbol": "EURUSD",
+  "data_type": "candles",
+  "timestamp_format": "iso8601_utc",
+  "price_divisor": 100000.0,
+  "generated_at": "2026-01-03T12:34:56Z",
+  "params": {
+    "resample": "5min",
+    "side": "bid",
+    "date_from": "2025-01-01",
+    "date_to": "2025-01-31"
+  }
+}
+```
+
+This ensures datasets are **self-describing and reproducible**, even months later.
+
+---
+
+## Price scaling (`--price-divisor`)
+
+Dukascopy tick prices are stored as integers or scaled values depending on the
+instrument.
+
+This tool applies **price scaling once, at export time**, using `--price-divisor`.
+
+Examples:
+
+| Instrument | Typical divisor |
+|----------|-----------------|
+| EURUSD   | `100000` |
+| GBPJPY  | `1000` |
+| Indices | `1` or `10` |
+
+If unsure, use probe mode:
 
 ```bash
-tradedesk-dc-export --symbol EURUSD --from 2024-01-01 --to 2024-01-02 --format ticks --out eurusd_ticks.csv
+tradedesk-dc-export   --symbol GBPSEK   --from 2025-07-01   --to 2025-07-01   --probe
 ```
 
-## Output contract (v1)
+Probe mode prints sample ticks at different divisors without writing files.
 
-- Timestamps are ISO-8601 UTC.
-- Prices are scaled exactly once at export time via `--price-divisor` (default `1.0`).
-- A sidecar metadata file is always written: `<output>.meta.json`.
+---
+
+## Intended workflow
+
+This tool is intended to be used as a **data preparation step**, not as part of
+your backtest runtime loop:
+
+1. Download and export historical data once
+2. Commit or archive the CSV + metadata
+3. Run fast, deterministic backtests against local files
+
+---
+
+## Requirements
+
+- Python 3.11+
+- Internet access to Dukascopy datafeed
+
+---
 
 ## License
-Licensed under the Apache License, Version 2.0
+
+Apache 2.0. See `LICENSE` and `NOTICE` for details.
