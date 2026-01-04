@@ -96,14 +96,15 @@ def _download_bi5(
     retries: int = 3,
 ) -> bytes | None:
     """
-    Returns compressed bytes, or None if file doesn't exist or contains no data.
+    Returns compressed bytes.
 
-    Notes:
-    - Dukascopy sometimes responds 200 with an empty body for hours with no data.
-      Treat those as "no data" (no retries), otherwise probe becomes very slow.
-    - Retries are for transient transport/server failures, not for empty payloads.
+    - None means "no file" (HTTP 404) or unrecoverable failure.
+    - b"" means "valid but empty" (HTTP 200 with zero-length body): no tick data for that hour.
+
+    We cache empty payloads as empty files so repeated exports do not re-download them.
     """
-    if cache_path is not None and cache_path.exists() and cache_path.stat().st_size > 0:
+    # If cached, return it even if it's 0 bytes (0 bytes means "no ticks for this hour")
+    if cache_path is not None and cache_path.exists():
         return cache_path.read_bytes()
 
     last_exc: Exception | None = None
@@ -112,17 +113,26 @@ def _download_bi5(
         try:
             with _SESSION.get(url, timeout=timeout) as r:
                 if r.status_code == 404:
+                    log.info("no tick data found (HTTP 404): %s", url)
                     return None
                 r.raise_for_status()
                 data = r.content
 
-            # Empirical: 200 with empty/tiny payload is effectively "no data for this hour"
-            # (do NOT retry; it multiplies runtime).
+            # HTTP 200 with empty body is valid: "no ticks this hour"
             if len(data) == 0:
-                return None
+                if cache_path is not None:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.touch(exist_ok=True)  # cache the "empty hour"
+                return b""
+
+            # Tiny non-zero payloads are usually junk/edge; keep existing behavior.
+            # (You already cache a 0-byte file here to avoid re-downloading.)
             if len(data) < 64:
                 log.debug("tiny bi5 payload (%d bytes) for %s; treating as no data", len(data), url)
-                return None
+                if cache_path is not None:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.touch(exist_ok=True)
+                return b""
 
             if cache_path is not None:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +282,7 @@ def export_range(
     # counters
     hours_total = 0
     hours_missing_404 = 0
+    hours_empty_200 = 0
     hours_downloaded = 0
     hours_decode_failed = 0
     hours_resampled_nonempty = 0
@@ -307,6 +318,11 @@ def export_range(
 
         if comp is None:
             hours_missing_404 += 1
+            continue
+
+        # Valid "no ticks this hour" marker (HTTP 200 with 0 bytes, cached as empty file)
+        if len(comp) == 0:
+            hours_empty_200 += 1
             continue
 
         hours_downloaded += 1
@@ -384,7 +400,7 @@ def export_range(
             hours_resampled_nonempty += 1
             all_frames.append(df)
 
-        if (hour_start.hour % 6 == 0):
+        if (hour_start.hour % 24 == 0):
             log.info(f"{symbol}: processed up to {hour_start.isoformat()}")
 
     if not all_frames:
@@ -402,7 +418,7 @@ def export_range(
     
     # log stats/counters
     log.info(
-        f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, "
+        f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, missing_200={hours_empty_200}, "
         f"downloaded={hours_downloaded}, decode_failed={hours_decode_failed}, "
         f"resampled_nonempty={hours_resampled_nonempty}, candles={len(frames)}"
     )
