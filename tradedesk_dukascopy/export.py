@@ -335,7 +335,7 @@ def export_range(
             raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
             if len(raw20) < 20:
                 print(f"{symbol}: probe failed (not enough decompressed bytes)")
-                return
+                return None
 
             if detected_format == "float":
                 unpack = struct.Struct(">i f f f f").unpack_from
@@ -365,7 +365,7 @@ def export_range(
                 for ts, bid_i, ask_i, bid_vol in rows:
                     print(ts.isoformat(), "bid", bid_i/d, "ask", ask_i/d, "bid_vol", bid_vol)
 
-            return  # probe exits after first successful hour
+            return None  # probe exits after first successful hour
 
         try:
             assert detected_format is not None
@@ -428,3 +428,4 @@ def export_range(
     out_reset.to_csv(out_csv, index=False)
 
     log.info(f"Wrote: {out_csv}")
+    return out_csv

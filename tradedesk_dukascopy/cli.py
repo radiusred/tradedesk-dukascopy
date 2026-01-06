@@ -102,11 +102,12 @@ def main(argv: list[str] | None = None) -> int:
             probe_ticks=args.probe_ticks,
             out=out,
         )
+        
+        if output_csv is not None:
+            write_sidecar(meta, output_csv)
+            
     except KeyboardInterrupt:
         logging.getLogger(__name__).warning("Interrupted by user (Ctrl-C).")
         return 130
-    
-    if output_csv is not None:
-        write_sidecar(meta, output_csv)
 
     return 0
