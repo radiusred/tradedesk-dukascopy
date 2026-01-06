@@ -21,7 +21,10 @@ pip install tradedesk-dukascopy
 Export 5-minute candles for EURUSD:
 
 ```bash
-tradedesk-dc-export   --symbol EURUSD   --from 2025-01-01   --to 2025-01-31   --out data   --price-divisor 100000
+tradedesk-dc-export --symbol EURUSD \
+  --from 2025-01-01 --to 2025-01-31 \
+  --out data \
+  --price-divisor 1000
 ```
 
 This produces:
@@ -88,14 +91,16 @@ Examples:
 
 | Instrument | Typical divisor |
 |----------|-----------------|
-| EURUSD   | `100000` |
-| GBPJPY  | `1000` |
+| EURUSD   | `1000` |
+| USDJPY  | `100000` |
 | Indices | `1` or `10` |
 
 If unsure, use probe mode:
 
 ```bash
-tradedesk-dc-export   --symbol GBPSEK   --from 2025-07-01   --to 2025-07-01   --probe
+tradedesk-dc-export --symbol GBPSEK \
+  --from 2025-07-01 --to 2025-07-01 \
+  --probe
 ```
 
 Probe mode prints sample ticks at different divisors without writing files.
@@ -122,4 +127,7 @@ your backtest runtime loop:
 
 ## License
 
-Apache 2.0. See `LICENSE` and `NOTICE` for details.
+Licensed under the Apache License, Version 2.0.
+See: https://www.apache.org/licenses/LICENSE-2.0
+
+Copyright 2026 [Radius Red Ltd.](https://github.com/radiusred)
