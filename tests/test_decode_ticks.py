@@ -51,7 +51,7 @@ def test_decode_ticks_float_decodes_values_and_timestamps() -> None:
     assert t0.bid_vol == pytest.approx(12.0)
 
     t1 = ticks[1]
-    assert t1.ts == hour_start.replace(microsecond=0)  # guard against microsecond drift
+    assert t1.ts == hour_start.replace(microsecond=500_000)
     assert (t1.ts - hour_start).total_seconds() == pytest.approx(0.5)
     assert t1.ask == pytest.approx(1.2350)
     assert t1.bid == pytest.approx(1.2346)
