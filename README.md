@@ -1,5 +1,7 @@
 # tradedesk-dukascopy
 
+![CI Build](https://github.com/radiusred/tradedesk-dukascopy/actions/workflows/ci.yml/badge.svg)
+
 Dukascopy tick downloader and candle exporter for backtesting workflows.
 
 This tool downloads raw tick data from Dukascopy, converts it into clean,
