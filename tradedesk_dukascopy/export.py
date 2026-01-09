@@ -239,7 +239,8 @@ def _ticks_to_candles(
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
     idx = pd.DatetimeIndex([t.ts for t in ticks], tz="UTC")
-
+    resample_rule = resample_rule.strip().lower()
+    
     if price_side == "bid":
         px = pd.Series([t.bid for t in ticks], index=idx)
         vol = pd.Series([t.bid_vol for t in ticks], index=idx)
