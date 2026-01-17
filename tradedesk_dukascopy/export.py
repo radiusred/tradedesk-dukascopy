@@ -33,6 +33,11 @@ from tradedesk_dukascopy.metadata import write_sidecar
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy)"
+# Retry configuration
+RETRY_BASE_DELAY = 0.5  # seconds
+RETRY_MAX_DELAY = 4.0   # seconds
+RETRY_BACKOFF_FACTOR = 2.0
+
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": UA})
 
@@ -92,7 +97,7 @@ def _dukascopy_tick_url(symbol: str, hour_start: datetime) -> str:
 def _download_bi5(
     url: str,
     cache_path: Path | None,
-    timeout: tuple[float, float] = (5.0, 10.0),
+    timeout: tuple[float, float] = (3.0, 15.0),
     retries: int = 3,
 ) -> bytes | None:
     """
@@ -102,12 +107,15 @@ def _download_bi5(
     - b"" means "valid but empty" (HTTP 200 with zero-length body): no tick data for that hour.
 
     We cache empty payloads as empty files so repeated exports do not re-download them.
+    
+    Uses exponential backoff on retries: 0.5s, 1.0s, 2.0s, 4.0s (capped).
     """
     # If cached, return it even if it's 0 bytes (0 bytes means "no ticks for this hour")
     if cache_path is not None and cache_path.exists():
         return cache_path.read_bytes()
 
     last_exc: Exception | None = None
+    delay = RETRY_BASE_DELAY
 
     for attempt in range(1, retries + 1):
         try:
@@ -126,7 +134,6 @@ def _download_bi5(
                 return b""
 
             # Tiny non-zero payloads are usually junk/edge; keep existing behavior.
-            # (You already cache a 0-byte file here to avoid re-downloading.)
             if len(data) < 64:
                 log.debug("tiny bi5 payload (%d bytes) for %s; treating as no data", len(data), url)
                 if cache_path is not None:
@@ -145,6 +152,12 @@ def _download_bi5(
         except Exception as e:
             last_exc = e
             log.debug("download attempt %d/%d failed for %s: %s", attempt, retries, url, e)
+            
+            # Backoff before retry (but not after final attempt)
+            if attempt < retries:
+                import time
+                time.sleep(delay)
+                delay = min(delay * RETRY_BACKOFF_FACTOR, RETRY_MAX_DELAY)
 
     log.warning("skipping %s after %d failed attempts (%s)", url, retries, last_exc)
     return None
