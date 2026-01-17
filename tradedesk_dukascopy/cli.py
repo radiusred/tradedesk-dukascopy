@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resample", default="5min", help="resample rule (candles only) - the sizing of the output candles, e.g. 5min, 1H, 1D")
     p.add_argument("--side", choices=["bid", "ask", "mid"], default="bid")
     p.add_argument("--price-divisor", type=float, default=1.0, help="only used if Dukascopy tick prices are encoded as int32; divisor applied during decode and recorded in metadata")
-    p.add_argument("--cache-dir", type=Path, default=Path(".cache/dukascopy"), help="Cache directory for .bi5 files (use --no-cache to disable)")
+    p.add_argument("--cache-dir", type=Path, default=Path(".cache/marketdata"), help="Cache directory for .bi5 files (use --no-cache to disable)")
     p.add_argument("--no-cache", action="store_true", help="Disable caching .bi5 tick files and always re-download")
     p.add_argument("--probe", action="store_true", help="Probe one hour and print decoded ticks; no files written.")
     p.add_argument("--probe-ticks", type=int, default=10, help="Number of ticks to print when probing (default: 10)")
