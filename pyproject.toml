@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "requests>=2.32",
     "pandas>=2.2",
+    "rich>=14.2",
 ]
 
 [project.optional-dependencies]

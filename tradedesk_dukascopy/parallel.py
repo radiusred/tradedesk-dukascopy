@@ -55,7 +55,6 @@ def _export_worker(task: ExportTask) -> ExportResult:
         log.exception(f"Failed to export {task.symbol}")
         return ExportResult(symbol=task.symbol, output_csv=None, success=False, error=str(e))
 
-
 def run_parallel_exports(
     tasks: list[ExportTask],
     max_workers: int,
@@ -74,15 +73,20 @@ def run_parallel_exports(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_export_worker, task): task for task in tasks}
         
-        for future in as_completed(futures):
-            task = futures[future]
-            result = future.result()
-            results.append(result)
-            completed += 1
-            
-            if result.success:
-                log.info(f"[{completed}/{total}] ✓ {result.symbol} complete")
-            else:
-                log.error(f"[{completed}/{total}] ✗ {result.symbol} failed: {result.error}")
+        try:
+            for future in as_completed(futures):
+                task = futures[future]
+                result = future.result()
+                results.append(result)
+                completed += 1
+                
+                if result.success:
+                    log.info(f"[{completed}/{total}] ✓ {result.symbol} complete")
+                else:
+                    log.error(f"[{completed}/{total}] ✗ {result.symbol} failed: {result.error}")
+        except KeyboardInterrupt:
+            log.warning("Cancelling remaining symbol exports")
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
     
     return results
