@@ -9,3 +9,4 @@ build/
 .ruff_cache/
 .vscode
 .coverage
+.cache

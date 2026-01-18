@@ -22,12 +22,14 @@ Examples:
   python scripts/export_dukascopy_candles.py --symbol USA500IDXUSD --from 2025-11-01 --to 2025-12-31 --out out/US500_5MINUTE.csv
 """
 
+import pandas as pd
+import logging, requests, io, math, lzma, struct
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
-import pandas as pd
-import logging, requests, io, math, lzma, struct
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tradedesk_dukascopy.metadata import write_sidecar
 
@@ -37,6 +39,8 @@ UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy
 RETRY_BASE_DELAY = 0.5  # seconds
 RETRY_MAX_DELAY = 4.0   # seconds
 RETRY_BACKOFF_FACTOR = 2.0
+# Download parallelisation
+DOWNLOAD_THREADS_PER_INSTRUMENT = 4
 
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": UA})
@@ -310,112 +314,162 @@ def export_range(
     end_exclusive = (end_utc_inclusive + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     all_frames: list[pd.DataFrame] = []
+    
+    # Collect all hours to download
+    hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
+    hours_total = len(hours_to_fetch)
+    
+    log.info(f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads")
 
-    for hour_start in _iter_hours(start_utc, end_exclusive):
-        hours_total += 1
-        url = _dukascopy_tick_url(symbol, hour_start)
-
+    # Probe mode: download only first hour, probe, and exit immediately
+    if probe:
+        first_hour = hours_to_fetch[0]
+        url = _dukascopy_tick_url(symbol, first_hour)
         cache_path = None
         if cache_dir is not None:
-            # Cache mirrors URL path (nice for debugging)
-            cache_path = cache_dir / symbol / f"{hour_start.year}" / f"{hour_start.month-1:02d}" / f"{hour_start.day:02d}" / f"{hour_start.hour:02d}h_ticks.bi5"
+            cache_path = cache_dir / symbol / f"{first_hour.year}" / f"{first_hour.month-1:02d}" / f"{first_hour.day:02d}" / f"{first_hour.hour:02d}h_ticks.bi5"
         
-        dl_timeout = (3.0, 3.0) if probe else (5.0, 10.0)
-        dl_retries = 1 if probe else 3
+        comp = _download_bi5(url, cache_path=cache_path, timeout=(2.0, 10.0), retries=3)
+        
+        if comp is None or len(comp) == 0:
+            print(f"{symbol}: no data for probe hour {first_hour.isoformat()}")
+            return None
+        
+        detected_format = _probe_price_format(comp)
+        print(f"{symbol}: detected tick price format = {detected_format}")
+        raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
+        
+        if len(raw20) < 20:
+            print(f"{symbol}: probe failed (not enough decompressed bytes)")
+            return None
+
+        if detected_format == "float":
+            unpack = struct.Struct(">i f f f f").unpack_from
+            print(f"{symbol} @ {first_hour.isoformat()} (float): first {probe_ticks} ticks")
+            for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
+                ms, ask, bid, ask_vol, bid_vol = unpack(raw20, i)
+                ts = first_hour + timedelta(milliseconds=int(ms))
+                print(ts.isoformat(), "bid", bid, "ask", ask, "bid_vol", bid_vol)
+        else:
+            unpack = struct.Struct(">i i i f f").unpack_from
+            print(f"{symbol} @ {first_hour.isoformat()} (int): first {probe_ticks} ticks")
+            divisors = [1, 10, 100, 1000, 10000, 100000]
+            rows = []
+            for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
+                ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw20, i)
+                ts = first_hour + timedelta(milliseconds=int(ms))
+                rows.append((ts, bid_i, ask_i, bid_vol))
+            ts0, bid0, ask0, vol0 = rows[0]
+            print("first tick raw:", ts0.isoformat(), "bid_i", bid0, "ask_i", ask0, "vol", vol0)
+            for d in divisors:
+                print(f"  divisor {d:>6}: bid {bid0/d:.6f} ask {ask0/d:.6f}")
+            d = price_divisor or 1.0
+            print(f"using --price-divisor {d}:")
+            for ts, bid_i, ask_i, bid_vol in rows:
+                print(ts.isoformat(), "bid", bid_i/d, "ask", ask_i/d, "bid_vol", bid_vol)
+        
+        return None
+    
+    # Download hours in parallel
+    def download_hour(hour_start: datetime) -> tuple[datetime, bytes | None]:
+        """Download a single hour's tick data."""
         try:
+            url = _dukascopy_tick_url(symbol, hour_start)
+            cache_path = None
+            if cache_dir is not None:
+                cache_path = cache_dir / symbol / f"{hour_start.year}" / f"{hour_start.month-1:02d}" / f"{hour_start.day:02d}" / f"{hour_start.hour:02d}h_ticks.bi5"
+            
+            dl_timeout = (2.0, 10.0)
+            dl_retries = 3
+            
             comp = _download_bi5(url, cache_path=cache_path, timeout=dl_timeout, retries=dl_retries)
-        except Exception as e:
-            if probe:
-                log.debug("probe: skipping hour %s due to download error: %s", url, e)
-                continue
+            return (hour_start, comp)
+        except KeyboardInterrupt:
             raise
-
-        if comp is None:
-            hours_missing_404 += 1
-            continue
-
-        # Valid "no ticks this hour" marker (HTTP 200 with 0 bytes, cached as empty file)
-        if len(comp) == 0:
-            hours_empty_200 += 1
-            continue
-
-        hours_downloaded += 1
-        if detected_format is None:
-            detected_format = _probe_price_format(comp)
-            log.info(f"{symbol}: detected tick price format = {detected_format}")
-
-        if probe:
-            print(f"{symbol}: detected tick price format = {detected_format}")
-            raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
-            if len(raw20) < 20:
-                print(f"{symbol}: probe failed (not enough decompressed bytes)")
-                return None
-
-            if detected_format == "float":
-                unpack = struct.Struct(">i f f f f").unpack_from
-                print(f"{symbol} @ {hour_start.isoformat()} (float): first {probe_ticks} ticks")
-                for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
-                    ms, ask, bid, ask_vol, bid_vol = unpack(raw20, i)
-                    ts = hour_start + timedelta(milliseconds=int(ms))
-                    print(ts.isoformat(), "bid", bid, "ask", ask, "bid_vol", bid_vol)
-            else:
-                unpack = struct.Struct(">i i i f f").unpack_from
-                print(f"{symbol} @ {hour_start.isoformat()} (int): first {probe_ticks} ticks")
-                # show a few divisor interpretations to make it obvious
-                divisors = [1, 10, 100, 1000, 10000, 100000]
-                rows = []
-                for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
-                    ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw20, i)
-                    ts = hour_start + timedelta(milliseconds=int(ms))
-                    rows.append((ts, bid_i, ask_i, bid_vol))
-                # print first tick with suggested scalings
-                ts0, bid0, ask0, vol0 = rows[0]
-                print("first tick raw:", ts0.isoformat(), "bid_i", bid0, "ask_i", ask0, "vol", vol0)
-                for d in divisors:
-                    print(f"  divisor {d:>6}: bid {bid0/d:.6f} ask {ask0/d:.6f}")
-                # also print using user divisor
-                d = price_divisor or 1.0
-                print(f"using --price-divisor {d}:")
-                for ts, bid_i, ask_i, bid_vol in rows:
-                    print(ts.isoformat(), "bid", bid_i/d, "ask", ask_i/d, "bid_vol", bid_vol)
-
-            return None  # probe exits after first successful hour
-
-        try:
-            assert detected_format is not None
-            ticks = _decode_ticks(hour_start, comp, price_format=detected_format, price_divisor=price_divisor)
-        except lzma.LZMAError:
-            # If we cached a partial download, self-heal: delete cache and retry once.
-            if cache_path is not None and cache_path.exists():
-                try:
-                    log.warning(f"{symbol}: deleting suspect cache file: {cache_path}")
-                    cache_path.unlink()
-                except OSError:
-                    log.error(f"{symbol}: failed deleting suspect cache file: {cache_path}")
-
-            comp2 = _download_bi5(url, cache_path=cache_path)
-            if comp2 is None:
-                continue
-
-            try:
-                ticks = _decode_ticks(hour_start, comp2, price_format=detected_format, price_divisor=price_divisor)
-            except Exception as e:
-                # Don’t kill the whole export; skip this hour and continue.
-                log.warning(f"skipping corrupt hour {url}: {e}")
-                hours_decode_failed += 1
-                continue
         except Exception as e:
-            log.warning(f"skipping hour {url}: {e}")
-            hours_decode_failed += 1
-            continue
+            log.debug(f"Download failed for {hour_start}: {e}")
+            return (hour_start, None)
+    
+    # Stream downloads as they complete, process in chronological order
+    hour_data: dict[datetime, bytes | None] = {}
+    next_to_process = 0  # Index in hours_to_fetch
+    
+    try:
+        with ThreadPoolExecutor(max_workers=DOWNLOAD_THREADS_PER_INSTRUMENT) as executor:
+            # Submit all download tasks
+            futures = {executor.submit(download_hour, h): h for h in hours_to_fetch}
+            
+            # Process downloads as they complete
+            for future in as_completed(futures):
+                hour_start, comp = future.result()
+                hour_data[hour_start] = comp
+                
+                # Process any consecutive hours that are now ready
+                while next_to_process < len(hours_to_fetch):
+                    current_hour = hours_to_fetch[next_to_process]
+                    
+                    if current_hour not in hour_data:
+                        break  # Wait for this hour to download
+                    
+                    comp = hour_data.pop(current_hour)
+                    next_to_process += 1
+                    
+                    # Process this hour (existing logic)
+                    cache_path = None
+                    if cache_dir is not None:
+                        cache_path = cache_dir / symbol / f"{current_hour.year}" / f"{current_hour.month-1:02d}" / f"{current_hour.day:02d}" / f"{current_hour.hour:02d}h_ticks.bi5"
+                    
+                    if comp is None:
+                        hours_missing_404 += 1
+                        continue
 
-        df = _ticks_to_candles(ticks, resample_rule=resample_rule, price_side=price_side)
-        if not df.empty:
-            hours_resampled_nonempty += 1
-            all_frames.append(df)
+                    if len(comp) == 0:
+                        hours_empty_200 += 1
+                        continue
 
-        if (hour_start.hour % 24 == 0):
-            log.info(f"{symbol}: processed up to {hour_start.isoformat()}")
+                    hours_downloaded += 1
+                    
+                    if detected_format is None:
+                        detected_format = _probe_price_format(comp)
+                        log.info(f"{symbol}: detected tick price format = {detected_format}")
+
+                    try:
+                        assert detected_format is not None
+                        ticks = _decode_ticks(current_hour, comp, price_format=detected_format, price_divisor=price_divisor)
+                    except lzma.LZMAError:
+                        if cache_path is not None and cache_path.exists():
+                            try:
+                                log.warning(f"{symbol}: deleting suspect cache file: {cache_path}")
+                                cache_path.unlink()
+                            except OSError:
+                                log.error(f"{symbol}: failed deleting suspect cache file: {cache_path}")
+
+                        comp2 = _download_bi5(_dukascopy_tick_url(symbol, current_hour), cache_path=cache_path)
+                        if comp2 is None:
+                            continue
+
+                        try:
+                            ticks = _decode_ticks(current_hour, comp2, price_format=detected_format, price_divisor=price_divisor)
+                        except Exception as e:
+                            log.warning(f"skipping corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
+                            hours_decode_failed += 1
+                            continue
+                    except Exception as e:
+                        log.warning(f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
+                        hours_decode_failed += 1
+                        continue
+
+                    df = _ticks_to_candles(ticks, resample_rule=resample_rule, price_side=price_side)
+                    if not df.empty:
+                        hours_resampled_nonempty += 1
+                        all_frames.append(df)
+
+                    if (current_hour.hour % 24 == 0):
+                        log.info(f"{symbol}: processed up to {current_hour.isoformat()}")
+                        
+    except KeyboardInterrupt:
+        log.warning(f"{symbol}: download interrupted")
+        raise
 
     if not all_frames:
         raise RuntimeError(f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}")
