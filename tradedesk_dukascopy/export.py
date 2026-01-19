@@ -308,8 +308,6 @@ def export_range(
     detected_format: str | None = None
     symbol = _symbol_normalise(symbol)
 
-    log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
-
     # End-exclusive boundary for hour iteration
     end_exclusive = (end_utc_inclusive + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -319,10 +317,10 @@ def export_range(
     hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
     hours_total = len(hours_to_fetch)
     
-    log.info(f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads")
-
     # Probe mode: download only first hour, probe, and exit immediately
     if probe:
+        log.info(f"Running probe for {symbol} starting at {start_utc.isoformat()}")
+
         first_hour = hours_to_fetch[0]
         url = _dukascopy_tick_url(symbol, first_hour)
         cache_path = None
@@ -369,6 +367,10 @@ def export_range(
                 print(ts.isoformat(), "bid", bid_i/d, "ask", ask_i/d, "bid_vol", bid_vol)
         
         return None
+    
+    # Normal mode: parallel download
+    log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
+    log.info(f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads")
     
     # Download hours in parallel
     def download_hour(hour_start: datetime) -> tuple[datetime, bytes | None]:
