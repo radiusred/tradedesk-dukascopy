@@ -1,40 +1,41 @@
 import argparse, logging, sys, os
 from datetime import datetime, timezone
 from pathlib import Path
+from rich.logging import RichHandler
 
 from .export import export_range
 from .metadata import ExportMetadata, now_iso_utc, write_sidecar
 
 
-def configure_logging(level: str = "INFO", force: bool = False) -> None:
+def configure_logging(level: str = "INFO") -> None:
     """
     Configure root logger with console output.
-
-    By default, this is non-destructive: if the root logger already has handlers,
-    it will do nothing (assuming the application has configured logging).
-
-    Args:
-        level: Logging level (DEBUG, INFO, WARNING, ERROR)
-        force: If True, clear existing handlers and force this configuration
+    Uses RichHandler if TTY, plain StreamHandler otherwise.
     """
     root_logger = logging.getLogger()
-
-    if root_logger.hasHandlers() and not force:
-        return
-
     root_logger.setLevel(level.upper())
+    root_logger.handlers.clear()
 
-    if force:
-        root_logger.handlers.clear()
-
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    handler = logging.StreamHandler(sys.stdout)
+    if sys.stdout.isatty():
+        # Rich handler for TTY - integrates with progress displays
+        handler = RichHandler(
+            show_time=True,
+            show_path=False,
+            markup=False,
+            rich_tracebacks=True,
+        )
+        formatter = logging.Formatter("%(message)s")
+    else:
+        # Plain handler for non-TTY
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter(
+            "%(asctime)s %(levelname)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tradedesk-dc-export")
@@ -52,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=True, help="Output directory for exported CSV and metadata files")
     p.add_argument("--log-level", choices=["fatal", "error", "warn", "info", "debug", "trace"], default="info", help="Logging level (default: info)")
     return p
+
 
 def _parse_ymd(s: str) -> datetime:
     # Accept YYYY-MM-DD
@@ -86,22 +88,18 @@ def main(argv: list[str] | None = None) -> int:
         symbol = args.symbols[0]
         out = Path(args.out)
         
-        try:
-            export_range(
-                symbol=symbol,
-                start_utc=start_utc,
-                end_utc_inclusive=end_utc,
-                resample_rule=args.resample,
-                price_side=args.side,
-                price_divisor=args.price_divisor,
-                cache_dir=None if args.no_cache else args.cache_dir,
-                probe=True,
-                probe_ticks=args.probe_ticks,
-                out=out,
-            )
-        except KeyboardInterrupt:
-            log.warning("Interrupted by user (Ctrl-C).")
-            return 130
+        export_range(
+            symbol=symbol,
+            start_utc=start_utc,
+            end_utc_inclusive=end_utc,
+            resample_rule=args.resample,
+            price_side=args.side,
+            price_divisor=args.price_divisor,
+            cache_dir=None if args.no_cache else args.cache_dir,
+            probe=True,
+            probe_ticks=args.probe_ticks,
+            out=out,
+        )
         
         return 0
 
@@ -146,7 +144,10 @@ def main(argv: list[str] | None = None) -> int:
                         "side": args.side,
                     },
                 )
-                write_sidecar(meta, result.output_csv)
+                sidecar = write_sidecar(meta, result.output_csv)
+                # Only log in non-TTY mode
+                if not sys.stdout.isatty():
+                    log.info(f"Wrote metadata sidecar: {sidecar}")
         
         # Summary
         succeeded = sum(1 for r in results if r.success)
@@ -158,10 +159,11 @@ def main(argv: list[str] | None = None) -> int:
             log.warning(f"Failed symbols: {', '.join(failed_symbols)}")
             return 1
         else:
-            log.info(f"All {succeeded} symbols exported successfully")
+            # Only log success summary in non-TTY mode
+            if not sys.stdout.isatty():
+                log.info(f"All {succeeded} symbols exported successfully")
             return 0
-            
+        
     except KeyboardInterrupt:
-        log.warning("Interrupted by user (Ctrl-C).")
         return 130
     

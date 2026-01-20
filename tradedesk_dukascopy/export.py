@@ -30,8 +30,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from rich.progress import Progress
 
-from tradedesk_dukascopy.metadata import write_sidecar
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy)"
@@ -292,6 +292,7 @@ def export_range(
     cache_dir: Path | None,
     probe: bool = False,
     probe_ticks: int = 10,
+    progress: "Progress | None" = None,
 ) -> None:
     """
     Export [start_utc, end_utc_inclusive] into one CSV.
@@ -316,6 +317,15 @@ def export_range(
     # Collect all hours to download
     hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
     hours_total = len(hours_to_fetch)
+    
+    # Create progress task if Progress object provided
+    task_id = None
+    if progress is not None:
+        task_id = progress.add_task(
+            f"[cyan]{symbol}", 
+            total=hours_total,
+            symbol=symbol,  # Custom field for display
+        )
     
     # Probe mode: download only first hour, probe, and exit immediately
     if probe:
@@ -385,7 +395,13 @@ def export_range(
             dl_retries = 3
             
             comp = _download_bi5(url, cache_path=cache_path, timeout=dl_timeout, retries=dl_retries)
+
+            # Update progress after download attempt
+            if progress is not None and task_id is not None:
+                progress.update(task_id, advance=1)
+
             return (hour_start, comp)
+        
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -403,6 +419,11 @@ def export_range(
             
             # Process downloads as they complete
             for future in as_completed(futures):
+                # Check for cancellation
+                from tradedesk_dukascopy.parallel import _cancellation_event
+                if _cancellation_event.is_set():
+                    raise KeyboardInterrupt()
+                
                 hour_start, comp = future.result()
                 hour_data[hour_start] = comp
                 
@@ -466,7 +487,7 @@ def export_range(
                         hours_resampled_nonempty += 1
                         all_frames.append(df)
 
-                    if (current_hour.hour % 24 == 0):
+                    if (current_hour.hour % 24 == 0) and progress is None:
                         log.info(f"{symbol}: processed up to {current_hour.isoformat()}")
                         
     except KeyboardInterrupt:

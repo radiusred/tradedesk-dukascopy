@@ -2,13 +2,17 @@
 
 import logging
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-log = logging.getLogger(__name__)
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
+log = logging.getLogger(__name__)
+_cancellation_event = threading.Event()
 
 @dataclass
 class ExportTask:
@@ -32,7 +36,7 @@ class ExportResult:
     error: str | None = None
 
 
-def _export_worker(task: ExportTask) -> ExportResult:
+def _export_worker(task: ExportTask, progress: Progress | None = None) -> ExportResult:
     """Worker function to export a single symbol."""
     from tradedesk_dukascopy.export import export_range
     
@@ -48,6 +52,7 @@ def _export_worker(task: ExportTask) -> ExportResult:
             probe=False,
             probe_ticks=0,
             out=task.out,
+            progress=progress,
         )
         return ExportResult(symbol=task.symbol, output_csv=output_csv, success=True)
     
@@ -59,34 +64,56 @@ def run_parallel_exports(
     tasks: list[ExportTask],
     max_workers: int,
 ) -> list[ExportResult]:
-    """
-    Execute exports in parallel.
-    
-    Simple concurrent execution with periodic status updates.
-    """
+    """Execute exports in parallel."""
     total = len(tasks)
     results = []
-    completed = 0
+    use_rich = sys.stdout.isatty()
     
-    log.info(f"Starting parallel export of {total} symbols with {max_workers} workers")
+    _cancellation_event.clear()
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_export_worker, task): task for task in tasks}
-        
-        try:
+    if not use_rich:
+        log.info(f"Starting export of {total} symbols with {max_workers} workers")
+    
+    progress_ctx = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.fields[symbol]}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    ) if use_rich else nullcontext()
+    
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    
+    try:
+        with progress_ctx as progress:
+            futures = {
+                executor.submit(_export_worker, task, progress if use_rich else None): task 
+                for task in tasks
+            }
+            
+            completed = 0
             for future in as_completed(futures):
-                task = futures[future]
                 result = future.result()
                 results.append(result)
                 completed += 1
                 
                 if result.success:
-                    log.info(f"[{completed}/{total}] ✓ {result.symbol} complete")
+                    if not use_rich:
+                        log.info(f"[{completed}/{total}] ✓ {result.symbol} complete")
                 else:
-                    log.error(f"[{completed}/{total}] ✗ {result.symbol} failed: {result.error}")
-        except KeyboardInterrupt:
-            log.warning("Cancelling remaining symbol exports")
+                    prefix = f"[{completed}/{total}] " if not use_rich else ""
+                    log.error(f"{prefix}✗ {result.symbol} failed: {result.error}")
+                    
+    except KeyboardInterrupt:
+        _cancellation_event.set()
+        log.warning("Interrupted - cancelling in-progress downloads: this can take some time to complete...")
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+
+    finally:
+        if not _cancellation_event.is_set():
+            executor.shutdown(wait=True)
+        else:
             executor.shutdown(wait=False, cancel_futures=True)
-            raise
     
     return results
