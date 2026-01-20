@@ -2,13 +2,16 @@
 
 ![CI Build](https://github.com/radiusred/tradedesk-dukascopy/actions/workflows/ci.yml/badge.svg)
 
-Dukascopy tick downloader and candle exporter for backtesting workflows.
+Dukascopy tick downloader and candle exporter for use in backtesting your trading strategies.
+
+![loop](./docs/loop.gif)
 
 This tool downloads raw tick data from Dukascopy, converts it into clean,
 deterministic CSV candle files, and writes a metadata sidecar describing exactly
 how the data was produced.
 
 It is designed to be run once per dataset, not repeatedly during backtests.
+
 
 ---
 
