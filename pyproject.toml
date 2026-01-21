@@ -11,10 +11,10 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICEN[CS]E*"]
 authors = [
-  { name = "Radius Red Ltd.", email = "opensource@radiusred.co.uk" }
+  { name = "Radius Red Ltd.", email = "opensource@radiusred.uk" }
 ]
 maintainers = [
-  { name = "Radius Red Ltd.", email = "opensource@radiusred.co.uk" }
+  { name = "Radius Red Ltd.", email = "opensource@radiusred.uk" }
 ]
 keywords = ["dukascopy", "ticks", "candles", "backtesting", "trading"]
 classifiers = [
