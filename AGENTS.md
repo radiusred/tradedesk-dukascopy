@@ -62,6 +62,7 @@ Performance is secondary to correctness and transparency.
 * Follow Dukascopy protocol and data format realities
 * No `from __future__ import ...`
 * Prioritise readability and traceability
+* Code should meet `ruff check` and `mypy --strict` requirements
 
 When suggesting code:
 
