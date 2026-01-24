@@ -1,6 +1,10 @@
-import argparse, logging, sys, os
-from datetime import datetime, timezone
+import argparse
+import logging
+import os
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
+
 from rich.logging import RichHandler
 
 from .export import export_range
@@ -15,7 +19,8 @@ def configure_logging(level: str = "INFO") -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(level.upper())
     root_logger.handlers.clear()
-
+    handler: logging.Handler
+    
     if sys.stdout.isatty():
         # Rich handler for TTY - integrates with progress displays
         handler = RichHandler(
@@ -58,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _parse_ymd(s: str) -> datetime:
     # Accept YYYY-MM-DD
     dt = datetime.strptime(s.strip(), "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
+    return dt.replace(tzinfo=UTC)
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
