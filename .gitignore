@@ -1,12 +1,16 @@
-.venv/
 __pycache__/
-*.pyc
+.cache
+.coverage
 .dist/
-dist/
-build/
-*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .vscode
-.coverage
-.cache
+.venv/
+
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# set CLAUDE.md as a local symlink to AGENTS.md
+CLAUDE.md
