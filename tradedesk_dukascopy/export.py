@@ -18,8 +18,13 @@ timestamp,open,high,low,close,volume
 - Month in URL is zero-based. See Dukascopy datafeed conventions.
 
 Examples:
-  python scripts/export_dukascopy_candles.py --symbol EURUSD --from 2025-08-01 --to 2025-12-31 --out out/EURUSD_5MINUTE.csv
-  python scripts/export_dukascopy_candles.py --symbol USA500IDXUSD --from 2025-11-01 --to 2025-12-31 --out out/US500_5MINUTE.csv
+  python scripts/export_dukascopy_candles.py \
+    --symbol EURUSD --from 2025-08-01 --to 2025-12-31 \
+    --out out/EURUSD_5MINUTE.csv
+
+  python scripts/export_dukascopy_candles.py \
+    --symbol USA500IDXUSD --from 2025-11-01 --to 2025-12-31 \
+    --out out/US500_5MINUTE.csv
 """
 
 import io
@@ -41,7 +46,7 @@ BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy)"
 # Retry configuration
 RETRY_BASE_DELAY = 0.5  # seconds
-RETRY_MAX_DELAY = 4.0   # seconds
+RETRY_MAX_DELAY = 4.0  # seconds
 RETRY_BACKOFF_FACTOR = 2.0
 # Download parallelisation
 DOWNLOAD_THREADS_PER_INSTRUMENT = 4
@@ -50,6 +55,7 @@ _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": UA})
 
 log = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class Tick:
@@ -102,6 +108,7 @@ def _dukascopy_tick_url(symbol: str, hour_start: datetime) -> str:
     h = hour_start.hour
     return f"{BASE_URL}/{symbol}/{y}/{m0:02d}/{d:02d}/{h:02d}h_ticks.bi5"
 
+
 def _download_bi5(
     url: str,
     cache_path: Path | None,
@@ -115,7 +122,7 @@ def _download_bi5(
     - b"" means "valid but empty" (HTTP 200 with zero-length body): no tick data for that hour.
 
     We cache empty payloads as empty files so repeated exports do not re-download them.
-    
+
     Uses exponential backoff on retries: 0.5s, 1.0s, 2.0s, 4.0s (capped).
     """
     # If cached, return it even if it's 0 bytes (0 bytes means "no ticks for this hour")
@@ -160,15 +167,17 @@ def _download_bi5(
         except Exception as e:
             last_exc = e
             log.debug("download attempt %d/%d failed for %s: %s", attempt, retries, url, e)
-            
+
             # Backoff before retry (but not after final attempt)
             if attempt < retries:
                 import time
+
                 time.sleep(delay)
                 delay = min(delay * RETRY_BACKOFF_FACTOR, RETRY_MAX_DELAY)
 
     log.warning("skipping %s after %d failed attempts (%s)", url, retries, last_exc)
     return None
+
 
 def _probe_price_format(compressed: bytes) -> str:
     """
@@ -185,7 +194,7 @@ def _probe_price_format(compressed: bytes) -> str:
 
         if len(first) < 20:
             raise ValueError("bi5 too short to probe")
-        
+
     except EOFError as e:
         raise ValueError("Not enough decompressed bytes to probe tick format") from e
 
@@ -201,13 +210,17 @@ def _probe_price_format(compressed: bytes) -> str:
 
     return "float"
 
+
 def _read_n_tick_records(compressed: bytes, n: int) -> bytes:
     # Stream-decompress just enough to read n tick records (20 bytes each).
     need = 20 * n
     with lzma.open(io.BytesIO(compressed), "rb") as f:
         return f.read(need)
 
-def _decode_ticks(hour_start: datetime, compressed: bytes, *, price_format: str, price_divisor: float) -> list[Tick]:
+
+def _decode_ticks(
+    hour_start: datetime, compressed: bytes, *, price_format: str, price_divisor: float
+) -> list[Tick]:
     """
     Decode a .bi5 tick file.
 
@@ -231,7 +244,15 @@ def _decode_ticks(hour_start: datetime, compressed: bytes, *, price_format: str,
         for i in range(0, len(raw), 20):
             ms, ask, bid, ask_vol, bid_vol = unpack(raw, i)
             ts = hour_start + timedelta(milliseconds=int(ms))
-            ticks.append(Tick(ts=ts, bid=float(bid), ask=float(ask), bid_vol=float(bid_vol), ask_vol=float(ask_vol)))
+            ticks.append(
+                Tick(
+                    ts=ts,
+                    bid=float(bid),
+                    ask=float(ask),
+                    bid_vol=float(bid_vol),
+                    ask_vol=float(ask_vol),
+                )
+            )
         return ticks
 
     if price_format == "int":
@@ -240,7 +261,15 @@ def _decode_ticks(hour_start: datetime, compressed: bytes, *, price_format: str,
         for i in range(0, len(raw), 20):
             ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw, i)
             ts = hour_start + timedelta(milliseconds=int(ms))
-            ticks.append(Tick(ts=ts, bid=float(bid_i) / div, ask=float(ask_i) / div, bid_vol=float(bid_vol), ask_vol=float(ask_vol)))
+            ticks.append(
+                Tick(
+                    ts=ts,
+                    bid=float(bid_i) / div,
+                    ask=float(ask_i) / div,
+                    bid_vol=float(bid_vol),
+                    ask_vol=float(ask_vol),
+                )
+            )
         return ticks
 
     raise ValueError("price_format must be 'float' or 'int'")
@@ -261,7 +290,7 @@ def _ticks_to_candles(
 
     idx = pd.DatetimeIndex([t.ts for t in ticks], tz="UTC")
     resample_rule = resample_rule.strip().lower()
-    
+
     if price_side == "bid":
         px = pd.Series([t.bid for t in ticks], index=idx)
         vol = pd.Series([t.bid_vol for t in ticks], index=idx)
@@ -283,14 +312,14 @@ def _ticks_to_candles(
 
     return out
 
+
 def _probe(
     symbol: str,
-    first_hour: int,
+    first_hour: datetime,
     cache_dir: Path | None,
     probe_ticks: int,
     price_divisor: float | None,
 ) -> None:
-
     url = _dukascopy_tick_url(symbol, first_hour)
     cache_path = None
     if cache_dir is not None:
@@ -298,7 +327,7 @@ def _probe(
             cache_dir
             / symbol
             / f"{first_hour.year}"
-            / f"{first_hour.month-1:02d}"
+            / f"{first_hour.month - 1:02d}"
             / f"{first_hour.day:02d}"
             / f"{first_hour.hour:02d}h_ticks.bi5"
         )
@@ -336,12 +365,21 @@ def _probe(
         ts0, bid0, ask0, vol0 = rows[0]
         print("first tick raw:", ts0.isoformat(), "bid_i", bid0, "ask_i", ask0, "vol", vol0)
         for divisor in divisors:
-            print(f"  divisor {divisor:>6}: bid {bid0/divisor:.6f} ask {ask0/divisor:.6f}")
+            print(f"  divisor {divisor:>6}: bid {bid0 / divisor:.6f} ask {ask0 / divisor:.6f}")
 
         price_div: float = price_divisor or 1.0
         print(f"using --price-divisor {price_div}:")
         for ts, bid_i, ask_i, bid_vol in rows:
-            print(ts.isoformat(), "bid", bid_i / price_div, "ask", ask_i / price_div, "bid_vol", bid_vol)
+            print(
+                ts.isoformat(),
+                "bid",
+                bid_i / price_div,
+                "ask",
+                ask_i / price_div,
+                "bid_vol",
+                bid_vol,
+            )
+
 
 def export_range(
     *,
@@ -377,7 +415,9 @@ def export_range(
     symbol = _symbol_normalise(symbol)
 
     # End-exclusive boundary for hour iteration
-    end_exclusive = (end_utc_inclusive + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_exclusive = (end_utc_inclusive + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
     all_frames: list[pd.DataFrame] = []
 
@@ -410,7 +450,9 @@ def export_range(
 
     # Normal mode: parallel download
     log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
-    log.info(f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads")
+    log.info(
+        f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads"
+    )
 
     # Download hours in parallel
     def download_hour(hour_start: datetime) -> tuple[datetime, bytes | None]:
@@ -423,7 +465,7 @@ def export_range(
                     cache_dir
                     / symbol
                     / f"{hour_start.year}"
-                    / f"{hour_start.month-1:02d}"
+                    / f"{hour_start.month - 1:02d}"
                     / f"{hour_start.day:02d}"
                     / f"{hour_start.hour:02d}h_ticks.bi5"
                 )
@@ -459,6 +501,7 @@ def export_range(
 
             for future in as_completed(futures):
                 from tradedesk_dukascopy.parallel import _cancellation_event
+
                 if _cancellation_event.is_set():
                     raise KeyboardInterrupt()
 
@@ -480,7 +523,7 @@ def export_range(
                             cache_dir
                             / symbol
                             / f"{current_hour.year}"
-                            / f"{current_hour.month-1:02d}"
+                            / f"{current_hour.month - 1:02d}"
                             / f"{current_hour.day:02d}"
                             / f"{current_hour.hour:02d}h_ticks.bi5"
                         )
@@ -503,34 +546,52 @@ def export_range(
 
                     try:
                         assert detected_format is not None
-                        ticks = _decode_ticks(current_hour, comp, price_format=detected_format, price_divisor=price_divisor)
+                        ticks = _decode_ticks(
+                            current_hour,
+                            comp,
+                            price_format=detected_format,
+                            price_divisor=price_divisor,
+                        )
                     except lzma.LZMAError:
                         if cache_path is not None and cache_path.exists():
                             try:
                                 log.warning(f"{symbol}: deleting suspect cache file: {cache_path}")
                                 cache_path.unlink()
                             except OSError:
-                                log.error(f"{symbol}: failed deleting suspect cache file: {cache_path}")
+                                log.error(f"{symbol}: rm failed: suspect cache file: {cache_path}")
 
-                        comp2 = _download_bi5(_dukascopy_tick_url(symbol, current_hour), cache_path=cache_path)
+                        comp2 = _download_bi5(
+                            _dukascopy_tick_url(symbol, current_hour), cache_path=cache_path
+                        )
                         if comp2 is None:
                             _advance_resample_progress()
                             continue
 
                         try:
-                            ticks = _decode_ticks(current_hour, comp2, price_format=detected_format, price_divisor=price_divisor)
+                            ticks = _decode_ticks(
+                                current_hour,
+                                comp2,
+                                price_format=detected_format,
+                                price_divisor=price_divisor,
+                            )
                         except Exception as e:
-                            log.warning(f"skipping corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
+                            log.warning(
+                                f"corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}"
+                            )
                             hours_decode_failed += 1
                             _advance_resample_progress()
                             continue
                     except Exception as e:
-                        log.warning(f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
+                        log.warning(
+                            f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}"
+                        )
                         hours_decode_failed += 1
                         _advance_resample_progress()
                         continue
 
-                    df = _ticks_to_candles(ticks, resample_rule=resample_rule, price_side=price_side)
+                    df = _ticks_to_candles(
+                        ticks, resample_rule=resample_rule, price_side=price_side
+                    )
                     if not df.empty:
                         hours_resampled_nonempty += 1
                         all_frames.append(df)
@@ -545,7 +606,9 @@ def export_range(
         raise
 
     if not all_frames:
-        raise RuntimeError(f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}")
+        raise RuntimeError(
+            f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}"
+        )
 
     frames = pd.concat(all_frames).sort_index()
     start_ts = pd.Timestamp(start_utc)
@@ -558,8 +621,9 @@ def export_range(
     out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
 
     log.info(
-        f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, missing_200={hours_empty_200}, "
-        f"downloaded={hours_downloaded}, decode_failed={hours_decode_failed}, "
+        f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, "
+        f"missing_200={hours_empty_200}, downloaded={hours_downloaded}, "
+        f"decode_failed={hours_decode_failed}, "
         f"resampled_nonempty={hours_resampled_nonempty}, candles={len(frames)}"
     )
 

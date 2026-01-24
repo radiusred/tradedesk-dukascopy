@@ -1,6 +1,6 @@
 import lzma
 import struct
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -28,7 +28,7 @@ def _bi5_int_records(*rows: tuple[int, int, int, float, float]) -> bytes:
 
 
 def test_decode_ticks_float_decodes_values_and_timestamps() -> None:
-    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     comp = _bi5_float_records(
         (0, 1.2345, 1.2340, 10.0, 12.0),
         (500, 1.2350, 1.2346, 11.0, 13.0),
@@ -60,7 +60,7 @@ def test_decode_ticks_float_decodes_values_and_timestamps() -> None:
 
 
 def test_decode_ticks_int_applies_divisor_scaling() -> None:
-    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     # bid/ask are integers; divisor converts them to floats
     comp = _bi5_int_records(
         (0, 123450, 123400, 10.0, 12.0),
@@ -92,7 +92,7 @@ def test_decode_ticks_int_applies_divisor_scaling() -> None:
 
 
 def test_decode_ticks_raises_on_non_multiple_of_20_payload() -> None:
-    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     # Decompresses to 21 bytes => invalid (not multiple of 20)
     comp = lzma.compress(b"x" * 21)
@@ -107,7 +107,7 @@ def test_decode_ticks_raises_on_non_multiple_of_20_payload() -> None:
 
 
 def test_decode_ticks_invalid_price_format_raises() -> None:
-    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    hour_start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     comp = _bi5_float_records((0, 1.0, 1.0, 1.0, 1.0))
 
     with pytest.raises(ValueError, match="price_format must be"):

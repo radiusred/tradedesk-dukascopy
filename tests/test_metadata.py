@@ -23,7 +23,12 @@ def test_write_sidecar_writes_expected_json(tmp_path: Path) -> None:
         timestamp_format="iso8601_utc",
         price_divisor=100000.0,
         generated_at="2026-01-03T00:00:00Z",
-        params={"resample": "5min", "side": "bid", "date_from": "2025-01-01", "date_to": "2025-01-02"},
+        params={
+            "resample": "5min",
+            "side": "bid",
+            "date_from": "2025-01-01",
+            "date_to": "2025-01-02",
+        },
     )
 
     sidecar = write_sidecar(meta, out_csv)

@@ -1,6 +1,6 @@
 import lzma
 import struct
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -23,28 +23,28 @@ def test_symbol_normalise_removes_separators_and_uppercases() -> None:
 
 
 def test_iter_hours_includes_hour_when_start_on_boundary() -> None:
-    start = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
-    end_excl = datetime(2025, 1, 1, 3, 0, tzinfo=timezone.utc)
+    start = datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
+    end_excl = datetime(2025, 1, 1, 3, 0, tzinfo=UTC)
     got = list(ex._iter_hours(start, end_excl))
     assert got == [
-        datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc),
-        datetime(2025, 1, 1, 1, 0, tzinfo=timezone.utc),
-        datetime(2025, 1, 1, 2, 0, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 0, 0, tzinfo=UTC),
+        datetime(2025, 1, 1, 1, 0, tzinfo=UTC),
+        datetime(2025, 1, 1, 2, 0, tzinfo=UTC),
     ]
 
 
 def test_iter_hours_rounds_up_to_next_hour_when_start_not_on_boundary() -> None:
-    start = datetime(2025, 1, 1, 0, 30, tzinfo=timezone.utc)
-    end_excl = datetime(2025, 1, 1, 2, 0, tzinfo=timezone.utc)
+    start = datetime(2025, 1, 1, 0, 30, tzinfo=UTC)
+    end_excl = datetime(2025, 1, 1, 2, 0, tzinfo=UTC)
     got = list(ex._iter_hours(start, end_excl))
     assert got == [
-        datetime(2025, 1, 1, 1, 0, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 1, 0, tzinfo=UTC),
     ]
 
 
 def test_dukascopy_tick_url_month_is_zero_based() -> None:
     # June is month 6 => zero-based "05"
-    t = datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc)
+    t = datetime(2025, 6, 1, 0, 0, tzinfo=UTC)
     url = ex._dukascopy_tick_url("EURUSD", t)
     assert url.startswith(ex.BASE_URL)
     assert "/EURUSD/2025/05/01/00h_ticks.bi5" in url
@@ -83,11 +83,29 @@ def test_ticks_to_candles_empty_returns_empty_frame_with_columns() -> None:
 
 
 def test_ticks_to_candles_bid_ohlcv_resample() -> None:
-    base = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+    base = datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
     ticks = [
-        ex.Tick(ts=base + timedelta(seconds=10), bid=100.0, ask=101.0, bid_vol=1.0, ask_vol=2.0),
-        ex.Tick(ts=base + timedelta(seconds=50), bid=102.0, ask=103.0, bid_vol=3.0, ask_vol=4.0),
-        ex.Tick(ts=base + timedelta(minutes=1, seconds=5), bid=101.0, ask=102.0, bid_vol=5.0, ask_vol=6.0),
+        ex.Tick(
+            ts=base + timedelta(seconds=10),
+            bid=100.0,
+            ask=101.0,
+            bid_vol=1.0,
+            ask_vol=2.0,
+        ),
+        ex.Tick(
+            ts=base + timedelta(seconds=50),
+            bid=102.0,
+            ask=103.0,
+            bid_vol=3.0,
+            ask_vol=4.0,
+        ),
+        ex.Tick(
+            ts=base + timedelta(minutes=1, seconds=5),
+            bid=101.0,
+            ask=102.0,
+            bid_vol=5.0,
+            ask_vol=6.0,
+        ),
     ]
 
     df = ex._ticks_to_candles(ticks, resample_rule="1min", price_side="bid")
@@ -110,7 +128,7 @@ def test_ticks_to_candles_bid_ohlcv_resample() -> None:
 
 
 def test_ticks_to_candles_mid_price_and_mid_volume() -> None:
-    base = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+    base = datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
     ticks = [
         ex.Tick(ts=base + timedelta(seconds=1), bid=100.0, ask=102.0, bid_vol=2.0, ask_vol=4.0),
         ex.Tick(ts=base + timedelta(seconds=2), bid=101.0, ask=103.0, bid_vol=6.0, ask_vol=8.0),
@@ -130,7 +148,7 @@ def test_ticks_to_candles_mid_price_and_mid_volume() -> None:
 
 
 def test_ticks_to_candles_invalid_price_side_raises() -> None:
-    base = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+    base = datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
     ticks = [ex.Tick(ts=base, bid=1.0, ask=2.0, bid_vol=1.0, ask_vol=1.0)]
 
     with pytest.raises(ValueError, match="price_side must be one of"):
