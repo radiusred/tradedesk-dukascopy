@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 log = logging.getLogger(__name__)
 _cancellation_event = threading.Event()
@@ -73,10 +80,10 @@ def run_parallel_exports(
     
     if not use_rich:
         log.info(f"Starting export of {total} symbols with {max_workers} workers")
-    
+
     progress_ctx = Progress(
         SpinnerColumn(),
-        TextColumn("[bold]{task.fields[symbol]}"),
+        TextColumn("[bold]{task.fields[symbol]}[/] {task.fields[phase]}"),
         BarColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),
