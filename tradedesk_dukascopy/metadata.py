@@ -1,6 +1,6 @@
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,7 +17,7 @@ class ExportMetadata:
     params: dict[str, Any]
 
 def now_iso_utc() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 def write_sidecar(meta: ExportMetadata, outputfile: Path) -> Path:
     sidecar = outputfile.with_suffix(outputfile.suffix + ".meta.json")

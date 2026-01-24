@@ -132,7 +132,7 @@ def _download_bi5(
                     log.info("no tick data found (HTTP 404): %s", url)
                     return None
                 r.raise_for_status()
-                data = r.content
+                data: bytes = bytes(r.content)
 
             # HTTP 200 with empty body is valid: "no ticks this hour"
             if len(data) == 0:
@@ -392,12 +392,13 @@ def export_range(
                 rows.append((ts, bid_i, ask_i, bid_vol))
             ts0, bid0, ask0, vol0 = rows[0]
             print("first tick raw:", ts0.isoformat(), "bid_i", bid0, "ask_i", ask0, "vol", vol0)
-            for d in divisors:
-                print(f"  divisor {d:>6}: bid {bid0/d:.6f} ask {ask0/d:.6f}")
-            d = price_divisor or 1.0
-            print(f"using --price-divisor {d}:")
+            for divisor in divisors:
+                print(f"  divisor {divisor:>6}: bid {bid0/divisor:.6f} ask {ask0/divisor:.6f}")
+
+            price_div: float = price_divisor or 1.0
+            print(f"using --price-divisor {price_div}:")
             for ts, bid_i, ask_i, bid_vol in rows:
-                print(ts.isoformat(), "bid", bid_i / d, "ask", ask_i / d, "bid_vol", bid_vol)
+                print(ts.isoformat(), "bid", bid_i / price_div, "ask", ask_i / price_div, "bid_vol", bid_vol)
 
         return None
 
@@ -541,8 +542,11 @@ def export_range(
         raise RuntimeError(f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}")
 
     frames = pd.concat(all_frames).sort_index()
-    frames = frames.loc[start_utc : (end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))]
-    frames = frames[~frames.index.duplicated(keep="last")]
+    start_ts = pd.Timestamp(start_utc)
+    end_ts = pd.Timestamp(end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))
+    frames = frames.loc[start_ts:end_ts]
+    mask = ~frames.index.duplicated(keep="last")
+    frames = frames.loc[mask]
 
     out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
     out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
