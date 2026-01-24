@@ -1,6 +1,7 @@
 # tradedesk-dukascopy
 
 ![CI Build](https://github.com/radiusred/tradedesk-dukascopy/actions/workflows/ci.yml/badge.svg)
+[![PyPI Version](https://img.shields.io/pypi/v/tradedesk-dukascopy?label=PyPI)](https://pypi.python.org/pypi/tradedesk-dukascopy)
 
 Dukascopy tick downloader and candle exporter for use in backtesting your trading strategies.
 

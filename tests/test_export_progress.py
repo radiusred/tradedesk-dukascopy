@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
@@ -30,7 +30,7 @@ class FakeProgress:
 def test_export_range_reports_download_and_resample_progress(tmp_path, monkeypatch):
     from tradedesk_dukascopy import export as ex
 
-    start = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
     hours = [start + timedelta(hours=i) for i in range(3)]
     monkeypatch.setattr(ex, "_iter_hours", lambda *_args, **_kwargs: iter(hours))
     monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)

@@ -1,5 +1,5 @@
 import struct
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import tradedesk_dukascopy.export as ex
@@ -11,31 +11,35 @@ def test_symbol_normalise_strips_separators_and_uppercases() -> None:
 
 
 def test_iter_hours_rounds_up_to_next_hour() -> None:
-    start = datetime(2025, 1, 1, 0, 30, tzinfo=timezone.utc)
-    end_excl = datetime(2025, 1, 1, 3, 0, tzinfo=timezone.utc)
+    start = datetime(2025, 1, 1, 0, 30, tzinfo=UTC)
+    end_excl = datetime(2025, 1, 1, 3, 0, tzinfo=UTC)
 
     hours = list(ex._iter_hours(start, end_excl))
     assert hours == [
-        datetime(2025, 1, 1, 1, 0, tzinfo=timezone.utc),
-        datetime(2025, 1, 1, 2, 0, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 1, 0, tzinfo=UTC),
+        datetime(2025, 1, 1, 2, 0, tzinfo=UTC),
     ]
 
 
 def test_dukascopy_tick_url_month_is_zero_based() -> None:
     # June is month 6 => zero-based "05"
-    t = datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc)
+    t = datetime(2025, 6, 1, 0, 0, tzinfo=UTC)
     url = ex._dukascopy_tick_url("EURUSD", t)
     assert "/2025/05/01/00h_ticks.bi5" in url
 
 
-def test_export_range_probe_exits_after_first_successful_hour(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_export_range_probe_exits_after_first_successful_hour(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
     """
     Probe should stop after the first hour where comp bytes are present,
     without attempting subsequent hours.
     """
 
-    start = datetime(2025, 7, 1, 0, 0, tzinfo=timezone.utc)
-    end_incl = datetime(2025, 7, 1, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2025, 7, 1, 0, 0, tzinfo=UTC)
+    end_incl = datetime(2025, 7, 1, 0, 0, tzinfo=UTC)
 
     hours = [
         start,

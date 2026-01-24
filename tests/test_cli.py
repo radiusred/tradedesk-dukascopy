@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 
 import tradedesk_dukascopy.cli as cli
@@ -6,7 +6,7 @@ import tradedesk_dukascopy.cli as cli
 
 def test_parse_ymd_sets_utc_timezone() -> None:
     dt = cli._parse_ymd("2025-07-01")
-    assert dt.tzinfo == timezone.utc
+    assert dt.tzinfo == UTC
     assert dt.year == 2025 and dt.month == 7 and dt.day == 1
 
 

@@ -21,9 +21,11 @@ from rich.progress import (
 log = logging.getLogger(__name__)
 _cancellation_event = threading.Event()
 
+
 @dataclass
 class ExportTask:
     """Configuration for a single symbol export."""
+
     symbol: str
     start_utc: datetime
     end_utc_inclusive: datetime
@@ -37,6 +39,7 @@ class ExportTask:
 @dataclass
 class ExportResult:
     """Result from exporting a single symbol."""
+
     symbol: str
     output_csv: Path | None
     success: bool
@@ -46,7 +49,7 @@ class ExportResult:
 def _export_worker(task: ExportTask, progress: Progress | None = None) -> ExportResult:
     """Worker function to export a single symbol."""
     from tradedesk_dukascopy.export import export_range
-    
+
     try:
         output_csv = export_range(
             symbol=task.symbol,
@@ -62,10 +65,11 @@ def _export_worker(task: ExportTask, progress: Progress | None = None) -> Export
             progress=progress,
         )
         return ExportResult(symbol=task.symbol, output_csv=output_csv, success=True)
-    
+
     except Exception as e:
         log.exception(f"Failed to export {task.symbol}")
         return ExportResult(symbol=task.symbol, output_csv=None, success=False, error=str(e))
+
 
 def run_parallel_exports(
     tasks: list[ExportTask],
@@ -75,45 +79,51 @@ def run_parallel_exports(
     total = len(tasks)
     results = []
     use_rich = sys.stdout.isatty()
-    
+
     _cancellation_event.clear()
-    
+
     if not use_rich:
         log.info(f"Starting export of {total} symbols with {max_workers} workers")
 
-    progress_ctx = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold]{task.fields[symbol]}[/] {task.fields[phase]}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-    ) if use_rich else nullcontext()
-    
+    progress_ctx = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]{task.fields[symbol]}[/] {task.fields[phase]}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+        )
+        if use_rich
+        else nullcontext()
+    )
+
     executor = ThreadPoolExecutor(max_workers=max_workers)
-    
+
     try:
         with progress_ctx as progress:
             futures = {
-                executor.submit(_export_worker, task, progress if use_rich else None): task 
+                executor.submit(_export_worker, task, progress if use_rich else None): task
                 for task in tasks
             }
-            
+
             completed = 0
             for future in as_completed(futures):
                 result = future.result()
                 results.append(result)
                 completed += 1
-                
+
                 if result.success:
                     if not use_rich:
                         log.info(f"[{completed}/{total}] ✓ {result.symbol} complete")
                 else:
                     prefix = f"[{completed}/{total}] " if not use_rich else ""
                     log.error(f"{prefix}✗ {result.symbol} failed: {result.error}")
-                    
+
     except KeyboardInterrupt:
         _cancellation_event.set()
-        log.warning("Interrupted - cancelling in-progress downloads: this can take some time to complete...")
+        log.warning(
+            "Interrupted - cancelling in-progress downloads: this can take some time to complete..."
+        )
         executor.shutdown(wait=False, cancel_futures=True)
         raise
 
@@ -122,5 +132,5 @@ def run_parallel_exports(
             executor.shutdown(wait=True)
         else:
             executor.shutdown(wait=False, cancel_futures=True)
-    
+
     return results

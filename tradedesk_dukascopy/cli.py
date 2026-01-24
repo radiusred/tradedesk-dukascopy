@@ -20,7 +20,7 @@ def configure_logging(level: str = "INFO") -> None:
     root_logger.setLevel(level.upper())
     root_logger.handlers.clear()
     handler: logging.Handler
-    
+
     if sys.stdout.isatty():
         # Rich handler for TTY - integrates with progress displays
         handler = RichHandler(
@@ -37,26 +37,88 @@ def configure_logging(level: str = "INFO") -> None:
             "%(asctime)s %(levelname)s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-    
+
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tradedesk-dc-export")
-    p.add_argument("--symbols", nargs="+", required=True, metavar="SYMBOL", help="One or more symbols to export (e.g., EURUSD GBPUSD)")
-    p.add_argument("--from", dest="date_from", required=True, help="inclusive start date in UTC YYYY-MM-DD")
-    p.add_argument("--to", dest="date_to", required=True, help="inclusive end date in UTC YYYY-MM-DD")
-    p.add_argument("--resample", default="5min", help="resample rule (candles only) - the sizing of the output candles, e.g. 5min, 1H, 1D")
-    p.add_argument("--side", choices=["bid", "ask", "mid"], default="bid")
-    p.add_argument("--price-divisor", type=float, default=1.0, help="only used if Dukascopy tick prices are encoded as int32; divisor applied during decode and recorded in metadata")
-    p.add_argument("--cache-dir", type=Path, default=Path(".cache/marketdata"), help="Cache directory for .bi5 files (use --no-cache to disable)")
-    p.add_argument("--no-cache", action="store_true", help="Disable caching .bi5 tick files and always re-download")
-    p.add_argument("--workers", type=int, default=None, help="Max parallel instrument workers (default: CPU count - 2, min 1)")
-    p.add_argument("--probe", action="store_true", help="Probe one hour and print decoded ticks; no files written.")
-    p.add_argument("--probe-ticks", type=int, default=10, help="Number of ticks to print when probing (default: 10)")
-    p.add_argument("--out", required=True, help="Output directory for exported CSV and metadata files")
-    p.add_argument("--log-level", choices=["fatal", "error", "warn", "info", "debug", "trace"], default="info", help="Logging level (default: info)")
+    p.add_argument(
+        "--symbols",
+        nargs="+",
+        required=True,
+        metavar="SYMBOL",
+        help="One or more symbols to export (e.g., EURUSD GBPUSD)",
+    )
+    p.add_argument(
+        "--from",
+        dest="date_from",
+        required=True,
+        help="inclusive start date in UTC YYYY-MM-DD",
+    )
+    p.add_argument(
+        "--to",
+        dest="date_to",
+        required=True,
+        help="inclusive end date in UTC YYYY-MM-DD",
+    )
+    p.add_argument(
+        "--resample",
+        default="5min",
+        help="resample rule (candles only) - the sizing of the output candles, e.g. 5min, 1H, 1D",
+    )
+    p.add_argument(
+        "--side",
+        choices=["bid", "ask", "mid"],
+        default="bid",
+    )
+    p.add_argument(
+        "--price-divisor",
+        type=float,
+        default=1.0,
+        help="only used if Dukascopy tick prices are encoded as int32; "
+        "divisor applied during decode and recorded in metadata",
+    )
+    p.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path(".cache/marketdata"),
+        help="Cache directory for .bi5 files (use --no-cache to disable)",
+    )
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching .bi5 tick files and always re-download",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Max parallel instrument workers (default: CPU count - 2, min 1)",
+    )
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help="Probe one hour and print decoded ticks; no files written.",
+    )
+    p.add_argument(
+        "--probe-ticks",
+        type=int,
+        default=10,
+        help="Number of ticks to print when probing (default: 10)",
+    )
+    p.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for exported CSV and metadata files",
+    )
+    p.add_argument(
+        "--log-level",
+        choices=["fatal", "error", "warn", "info", "debug", "trace"],
+        default="info",
+        help="Logging level (default: info)",
+    )
     return p
 
 
@@ -64,6 +126,7 @@ def _parse_ymd(s: str) -> datetime:
     # Accept YYYY-MM-DD
     dt = datetime.strptime(s.strip(), "%Y-%m-%d")
     return dt.replace(tzinfo=UTC)
+
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
@@ -73,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if end_utc < start_utc:
         raise SystemExit("--to must be >= --from")
-    
+
     configure_logging(level=args.log_level.upper())
 
     # Determine worker count
@@ -81,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         workers = max(1, (os.cpu_count() or 2) - 2)
     else:
         workers = max(1, args.workers)
-    
+
     log = logging.getLogger(__name__)
     log.info(f"Processing {len(args.symbols)} symbols with up to {workers} workers")
 
@@ -89,10 +152,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.probe:
         if len(args.symbols) > 1:
             raise SystemExit("--probe mode only supports a single symbol")
-        
+
         symbol = args.symbols[0]
         out = Path(args.out)
-        
+
         export_range(
             symbol=symbol,
             start_utc=start_utc,
@@ -105,15 +168,15 @@ def main(argv: list[str] | None = None) -> int:
             probe_ticks=args.probe_ticks,
             out=out,
         )
-        
+
         return 0
 
     # Build export tasks
     from tradedesk_dukascopy.parallel import ExportTask, run_parallel_exports
-    
+
     out = Path(args.out)
     cache_dir = None if args.no_cache else args.cache_dir
-    
+
     tasks = [
         ExportTask(
             symbol=symbol,
@@ -130,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         results = run_parallel_exports(tasks, max_workers=workers)
-        
+
         # Write metadata for successful exports
         for result in results:
             if result.success and result.output_csv is not None:
@@ -153,11 +216,11 @@ def main(argv: list[str] | None = None) -> int:
                 # Only log in non-TTY mode
                 if not sys.stdout.isatty():
                     log.info(f"Wrote metadata sidecar: {sidecar}")
-        
+
         # Summary
         succeeded = sum(1 for r in results if r.success)
         failed = len(results) - succeeded
-        
+
         if failed > 0:
             log.warning(f"Completed: {succeeded} succeeded, {failed} failed")
             failed_symbols = [r.symbol for r in results if not r.success]
@@ -168,7 +231,6 @@ def main(argv: list[str] | None = None) -> int:
             if not sys.stdout.isatty():
                 log.info(f"All {succeeded} symbols exported successfully")
             return 0
-        
+
     except KeyboardInterrupt:
         return 130
-    
