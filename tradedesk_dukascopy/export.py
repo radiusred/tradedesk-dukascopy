@@ -22,16 +22,20 @@ Examples:
   python scripts/export_dukascopy_candles.py --symbol USA500IDXUSD --from 2025-11-01 --to 2025-12-31 --out out/US500_5MINUTE.csv
 """
 
-import pandas as pd
-import logging, requests, io, math, lzma, struct
-
+import io
+import logging
+import lzma
+import math
+import struct
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from rich.progress import Progress
 
+import pandas as pd
+import requests
+from rich.progress import Progress
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy)"
@@ -293,9 +297,13 @@ def export_range(
     probe: bool = False,
     probe_ticks: int = 10,
     progress: "Progress | None" = None,
-) -> None:
+) -> Path | None:
     """
     Export [start_utc, end_utc_inclusive] into one CSV.
+
+    If progress is provided, we create two tasks per symbol:
+      - dl: download attempts
+      - rs: processing/resampling progress (advances once per hour processed)
     """
 
     # counters
@@ -313,20 +321,28 @@ def export_range(
     end_exclusive = (end_utc_inclusive + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     all_frames: list[pd.DataFrame] = []
-    
+
     # Collect all hours to download
     hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
     hours_total = len(hours_to_fetch)
-    
-    # Create progress task if Progress object provided
-    task_id = None
+
+    # Create progress tasks if Progress object provided.
+    dl_task_id = None
+    rs_task_id = None
     if progress is not None:
-        task_id = progress.add_task(
-            f"[cyan]{symbol}", 
+        dl_task_id = progress.add_task(
+            f"[cyan]{symbol}[/] dl",
             total=hours_total,
-            symbol=symbol,  # Custom field for display
+            symbol=symbol,
+            phase="dl",
         )
-    
+        rs_task_id = progress.add_task(
+            f"[cyan]{symbol}[/] rs",
+            total=hours_total,
+            symbol=symbol,
+            phase="rs",
+        )
+
     # Probe mode: download only first hour, probe, and exit immediately
     if probe:
         log.info(f"Running probe for {symbol} starting at {start_utc.isoformat()}")
@@ -335,18 +351,25 @@ def export_range(
         url = _dukascopy_tick_url(symbol, first_hour)
         cache_path = None
         if cache_dir is not None:
-            cache_path = cache_dir / symbol / f"{first_hour.year}" / f"{first_hour.month-1:02d}" / f"{first_hour.day:02d}" / f"{first_hour.hour:02d}h_ticks.bi5"
-        
+            cache_path = (
+                cache_dir
+                / symbol
+                / f"{first_hour.year}"
+                / f"{first_hour.month-1:02d}"
+                / f"{first_hour.day:02d}"
+                / f"{first_hour.hour:02d}h_ticks.bi5"
+            )
+
         comp = _download_bi5(url, cache_path=cache_path, timeout=(2.0, 10.0), retries=3)
-        
+
         if comp is None or len(comp) == 0:
             print(f"{symbol}: no data for probe hour {first_hour.isoformat()}")
             return None
-        
+
         detected_format = _probe_price_format(comp)
         print(f"{symbol}: detected tick price format = {detected_format}")
         raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
-        
+
         if len(raw20) < 20:
             print(f"{symbol}: probe failed (not enough decompressed bytes)")
             return None
@@ -374,14 +397,14 @@ def export_range(
             d = price_divisor or 1.0
             print(f"using --price-divisor {d}:")
             for ts, bid_i, ask_i, bid_vol in rows:
-                print(ts.isoformat(), "bid", bid_i/d, "ask", ask_i/d, "bid_vol", bid_vol)
-        
+                print(ts.isoformat(), "bid", bid_i / d, "ask", ask_i / d, "bid_vol", bid_vol)
+
         return None
-    
+
     # Normal mode: parallel download
     log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
     log.info(f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads")
-    
+
     # Download hours in parallel
     def download_hour(hour_start: datetime) -> tuple[datetime, bytes | None]:
         """Download a single hour's tick data."""
@@ -389,69 +412,84 @@ def export_range(
             url = _dukascopy_tick_url(symbol, hour_start)
             cache_path = None
             if cache_dir is not None:
-                cache_path = cache_dir / symbol / f"{hour_start.year}" / f"{hour_start.month-1:02d}" / f"{hour_start.day:02d}" / f"{hour_start.hour:02d}h_ticks.bi5"
-            
+                cache_path = (
+                    cache_dir
+                    / symbol
+                    / f"{hour_start.year}"
+                    / f"{hour_start.month-1:02d}"
+                    / f"{hour_start.day:02d}"
+                    / f"{hour_start.hour:02d}h_ticks.bi5"
+                )
+
             dl_timeout = (2.0, 10.0)
             dl_retries = 3
-            
+
             comp = _download_bi5(url, cache_path=cache_path, timeout=dl_timeout, retries=dl_retries)
 
             # Update progress after download attempt
-            if progress is not None and task_id is not None:
-                progress.update(task_id, advance=1)
+            if progress is not None and dl_task_id is not None:
+                progress.update(dl_task_id, advance=1)
 
             return (hour_start, comp)
-        
+
         except KeyboardInterrupt:
             raise
         except Exception as e:
             log.debug(f"Download failed for {hour_start}: {e}")
             return (hour_start, None)
-    
+
     # Stream downloads as they complete, process in chronological order
     hour_data: dict[datetime, bytes | None] = {}
     next_to_process = 0  # Index in hours_to_fetch
-    
+
+    def _advance_resample_progress() -> None:
+        if progress is not None and rs_task_id is not None:
+            progress.update(rs_task_id, advance=1)
+
     try:
         with ThreadPoolExecutor(max_workers=DOWNLOAD_THREADS_PER_INSTRUMENT) as executor:
-            # Submit all download tasks
             futures = {executor.submit(download_hour, h): h for h in hours_to_fetch}
-            
-            # Process downloads as they complete
+
             for future in as_completed(futures):
-                # Check for cancellation
                 from tradedesk_dukascopy.parallel import _cancellation_event
                 if _cancellation_event.is_set():
                     raise KeyboardInterrupt()
-                
+
                 hour_start, comp = future.result()
                 hour_data[hour_start] = comp
-                
-                # Process any consecutive hours that are now ready
+
                 while next_to_process < len(hours_to_fetch):
                     current_hour = hours_to_fetch[next_to_process]
-                    
+
                     if current_hour not in hour_data:
                         break  # Wait for this hour to download
-                    
+
                     comp = hour_data.pop(current_hour)
                     next_to_process += 1
-                    
-                    # Process this hour (existing logic)
+
                     cache_path = None
                     if cache_dir is not None:
-                        cache_path = cache_dir / symbol / f"{current_hour.year}" / f"{current_hour.month-1:02d}" / f"{current_hour.day:02d}" / f"{current_hour.hour:02d}h_ticks.bi5"
-                    
+                        cache_path = (
+                            cache_dir
+                            / symbol
+                            / f"{current_hour.year}"
+                            / f"{current_hour.month-1:02d}"
+                            / f"{current_hour.day:02d}"
+                            / f"{current_hour.hour:02d}h_ticks.bi5"
+                        )
+
                     if comp is None:
                         hours_missing_404 += 1
+                        _advance_resample_progress()
                         continue
 
                     if len(comp) == 0:
                         hours_empty_200 += 1
+                        _advance_resample_progress()
                         continue
 
                     hours_downloaded += 1
-                    
+
                     if detected_format is None:
                         detected_format = _probe_price_format(comp)
                         log.info(f"{symbol}: detected tick price format = {detected_format}")
@@ -469,6 +507,7 @@ def export_range(
 
                         comp2 = _download_bi5(_dukascopy_tick_url(symbol, current_hour), cache_path=cache_path)
                         if comp2 is None:
+                            _advance_resample_progress()
                             continue
 
                         try:
@@ -476,10 +515,12 @@ def export_range(
                         except Exception as e:
                             log.warning(f"skipping corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
                             hours_decode_failed += 1
+                            _advance_resample_progress()
                             continue
                     except Exception as e:
                         log.warning(f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
                         hours_decode_failed += 1
+                        _advance_resample_progress()
                         continue
 
                     df = _ticks_to_candles(ticks, resample_rule=resample_rule, price_side=price_side)
@@ -487,9 +528,11 @@ def export_range(
                         hours_resampled_nonempty += 1
                         all_frames.append(df)
 
+                    _advance_resample_progress()
+
                     if (current_hour.hour % 24 == 0) and progress is None:
                         log.info(f"{symbol}: processed up to {current_hour.isoformat()}")
-                        
+
     except KeyboardInterrupt:
         log.warning(f"{symbol}: download interrupted")
         raise
@@ -498,22 +541,19 @@ def export_range(
         raise RuntimeError(f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}")
 
     frames = pd.concat(all_frames).sort_index()
-    # clip exactly to requested date range (inclusive)
     frames = frames.loc[start_utc : (end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))]
-    # de-duplicate any overlapping resample bins (shouldn't happen, but safe)
     frames = frames[~frames.index.duplicated(keep="last")]
-    # Export with explicit timestamp column (backtest expects this)
+
     out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
-    # ISO8601 in UTC with offset
     out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
-    
-    # log stats/counters
+
     log.info(
         f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, missing_200={hours_empty_200}, "
         f"downloaded={hours_downloaded}, decode_failed={hours_decode_failed}, "
         f"resampled_nonempty={hours_resampled_nonempty}, candles={len(frames)}"
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
+
+    out.mkdir(parents=True, exist_ok=True)
     rule_label = resample_rule.replace(" ", "").upper()
     out_csv = out / f"{symbol}_{rule_label}.csv"
     out_reset.to_csv(out_csv, index=False)

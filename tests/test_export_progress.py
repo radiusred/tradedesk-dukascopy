@@ -1,0 +1,82 @@
+from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
+
+import pandas as pd
+
+
+@dataclass
+class _UpdateCall:
+    task_id: int
+    advance: int
+
+
+class FakeProgress:
+    def __init__(self) -> None:
+        self.add_task_calls: list[tuple[str, int, dict]] = []
+        self.update_calls: list[_UpdateCall] = []
+        self._next_id = 1
+
+    def add_task(self, description: str, *, total: int, **fields: object) -> int:
+        task_id = self._next_id
+        self._next_id += 1
+        self.add_task_calls.append((description, total, dict(fields)))
+        return task_id
+
+    def update(self, task_id: int, *, advance: int = 0, **_kwargs: object) -> None:
+        if advance:
+            self.update_calls.append(_UpdateCall(task_id=task_id, advance=int(advance)))
+
+
+def test_export_range_reports_download_and_resample_progress(tmp_path, monkeypatch):
+    from tradedesk_dukascopy import export as ex
+
+    start = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+    hours = [start + timedelta(hours=i) for i in range(3)]
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_args, **_kwargs: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+
+    monkeypatch.setattr(ex, "_download_bi5", lambda *_args, **_kwargs: b"x")
+    monkeypatch.setattr(ex, "_probe_price_format", lambda *_args, **_kwargs: "float")
+
+    def _fake_decode_ticks(hour_start, _compressed, *, price_format, price_divisor):
+        return [ex.Tick(ts=hour_start, bid=1.0, ask=1.0, bid_vol=1.0, ask_vol=1.0)]
+
+    monkeypatch.setattr(ex, "_decode_ticks", _fake_decode_ticks)
+
+    def _fake_ticks_to_candles(_ticks, *, resample_rule, price_side):
+        idx = pd.DatetimeIndex([start], tz="UTC")
+        return pd.DataFrame(
+            {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0]},
+            index=idx,
+        )
+
+    monkeypatch.setattr(ex, "_ticks_to_candles", _fake_ticks_to_candles)
+
+    prog = FakeProgress()
+    out_dir = tmp_path / "out"
+
+    out_csv = ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start,
+        out=out_dir,
+        price_side="bid",
+        price_divisor=1.0,
+        resample_rule="5min",
+        cache_dir=None,
+        probe=False,
+        progress=prog,
+    )
+
+    assert out_csv is not None
+    assert out_csv.exists()
+
+    assert len(prog.add_task_calls) == 2
+    phases = {fields["phase"] for _desc, _total, fields in prog.add_task_calls}
+    assert phases == {"dl", "rs"}
+
+    advances_by_task: dict[int, int] = {}
+    for c in prog.update_calls:
+        advances_by_task[c.task_id] = advances_by_task.get(c.task_id, 0) + c.advance
+
+    assert sorted(advances_by_task.values()) == [len(hours), len(hours)]
