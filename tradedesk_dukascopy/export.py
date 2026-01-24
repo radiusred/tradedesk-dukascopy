@@ -283,6 +283,65 @@ def _ticks_to_candles(
 
     return out
 
+def _probe(
+    symbol: str,
+    first_hour: int,
+    cache_dir: Path | None,
+    probe_ticks: int,
+    price_divisor: float | None,
+) -> None:
+
+    url = _dukascopy_tick_url(symbol, first_hour)
+    cache_path = None
+    if cache_dir is not None:
+        cache_path = (
+            cache_dir
+            / symbol
+            / f"{first_hour.year}"
+            / f"{first_hour.month-1:02d}"
+            / f"{first_hour.day:02d}"
+            / f"{first_hour.hour:02d}h_ticks.bi5"
+        )
+
+    comp = _download_bi5(url, cache_path=cache_path, timeout=(2.0, 10.0), retries=3)
+
+    if comp is None or len(comp) == 0:
+        print(f"{symbol}: no data for probe hour {first_hour.isoformat()}")
+        return None
+
+    detected_format = _probe_price_format(comp)
+    print(f"{symbol}: detected tick price format = {detected_format}")
+    raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
+
+    if len(raw20) < 20:
+        print(f"{symbol}: probe failed (not enough decompressed bytes)")
+        return None
+
+    if detected_format == "float":
+        unpack = struct.Struct(">i f f f f").unpack_from
+        print(f"{symbol} @ {first_hour.isoformat()} (float): first {probe_ticks} ticks")
+        for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
+            ms, ask, bid, ask_vol, bid_vol = unpack(raw20, i)
+            ts = first_hour + timedelta(milliseconds=int(ms))
+            print(ts.isoformat(), "bid", bid, "ask", ask, "bid_vol", bid_vol)
+    else:
+        unpack = struct.Struct(">i i i f f").unpack_from
+        print(f"{symbol} @ {first_hour.isoformat()} (int): first {probe_ticks} ticks")
+        divisors = [1, 10, 100, 1000, 10000, 100000]
+        rows = []
+        for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
+            ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw20, i)
+            ts = first_hour + timedelta(milliseconds=int(ms))
+            rows.append((ts, bid_i, ask_i, bid_vol))
+        ts0, bid0, ask0, vol0 = rows[0]
+        print("first tick raw:", ts0.isoformat(), "bid_i", bid0, "ask_i", ask0, "vol", vol0)
+        for divisor in divisors:
+            print(f"  divisor {divisor:>6}: bid {bid0/divisor:.6f} ask {ask0/divisor:.6f}")
+
+        price_div: float = price_divisor or 1.0
+        print(f"using --price-divisor {price_div}:")
+        for ts, bid_i, ask_i, bid_vol in rows:
+            print(ts.isoformat(), "bid", bid_i / price_div, "ask", ask_i / price_div, "bid_vol", bid_vol)
 
 def export_range(
     *,
@@ -326,6 +385,12 @@ def export_range(
     hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
     hours_total = len(hours_to_fetch)
 
+    # Probe mode: download only first hour, probe, and exit immediately
+    if probe:
+        log.info(f"Running probe for {symbol} starting at {start_utc.isoformat()}")
+        _probe(symbol, hours_to_fetch[0], cache_dir, probe_ticks, price_divisor)
+        return None
+
     # Create progress tasks if Progress object provided.
     dl_task_id = None
     rs_task_id = None
@@ -342,65 +407,6 @@ def export_range(
             symbol=symbol,
             phase="rs",
         )
-
-    # Probe mode: download only first hour, probe, and exit immediately
-    if probe:
-        log.info(f"Running probe for {symbol} starting at {start_utc.isoformat()}")
-
-        first_hour = hours_to_fetch[0]
-        url = _dukascopy_tick_url(symbol, first_hour)
-        cache_path = None
-        if cache_dir is not None:
-            cache_path = (
-                cache_dir
-                / symbol
-                / f"{first_hour.year}"
-                / f"{first_hour.month-1:02d}"
-                / f"{first_hour.day:02d}"
-                / f"{first_hour.hour:02d}h_ticks.bi5"
-            )
-
-        comp = _download_bi5(url, cache_path=cache_path, timeout=(2.0, 10.0), retries=3)
-
-        if comp is None or len(comp) == 0:
-            print(f"{symbol}: no data for probe hour {first_hour.isoformat()}")
-            return None
-
-        detected_format = _probe_price_format(comp)
-        print(f"{symbol}: detected tick price format = {detected_format}")
-        raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
-
-        if len(raw20) < 20:
-            print(f"{symbol}: probe failed (not enough decompressed bytes)")
-            return None
-
-        if detected_format == "float":
-            unpack = struct.Struct(">i f f f f").unpack_from
-            print(f"{symbol} @ {first_hour.isoformat()} (float): first {probe_ticks} ticks")
-            for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
-                ms, ask, bid, ask_vol, bid_vol = unpack(raw20, i)
-                ts = first_hour + timedelta(milliseconds=int(ms))
-                print(ts.isoformat(), "bid", bid, "ask", ask, "bid_vol", bid_vol)
-        else:
-            unpack = struct.Struct(">i i i f f").unpack_from
-            print(f"{symbol} @ {first_hour.isoformat()} (int): first {probe_ticks} ticks")
-            divisors = [1, 10, 100, 1000, 10000, 100000]
-            rows = []
-            for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
-                ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw20, i)
-                ts = first_hour + timedelta(milliseconds=int(ms))
-                rows.append((ts, bid_i, ask_i, bid_vol))
-            ts0, bid0, ask0, vol0 = rows[0]
-            print("first tick raw:", ts0.isoformat(), "bid_i", bid0, "ask_i", ask0, "vol", vol0)
-            for divisor in divisors:
-                print(f"  divisor {divisor:>6}: bid {bid0/divisor:.6f} ask {ask0/divisor:.6f}")
-
-            price_div: float = price_divisor or 1.0
-            print(f"using --price-divisor {price_div}:")
-            for ts, bid_i, ask_i, bid_vol in rows:
-                print(ts.isoformat(), "bid", bid_i / price_div, "ask", ask_i / price_div, "bid_vol", bid_vol)
-
-        return None
 
     # Normal mode: parallel download
     log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
