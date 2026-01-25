@@ -51,7 +51,7 @@ Issues = "https://github.com/radiusred/tradedesk-dukascopy/issues"
 packages = ["tradedesk_dukascopy"]
 
 [tool.hatch.version]
-path = "tradedesk_dukascopy/__about__.py"
+path = "tradedesk_dukascopy/__init__.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
