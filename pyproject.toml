@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tradedesk-dukascopy"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Dukascopy tick downloader and candle/tick exporter for backtesting workflows."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,6 +49,9 @@ Issues = "https://github.com/radiusred/tradedesk-dukascopy/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["tradedesk_dukascopy"]
+
+[tool.hatch.version]
+path = "tradedesk_dukascopy/__about__.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
