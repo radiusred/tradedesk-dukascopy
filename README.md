@@ -5,7 +5,7 @@
 
 Dukascopy tick downloader and candle exporter for use in backtesting your trading strategies.
 
-![loop](https://i.ibb.co/RTXk1GtZ/tradedesk-dukascopy.gif)
+![loop](https://i.ibb.co/BSz1JSH/tradedesk-dukascopy.gif)
 
 This tool downloads raw tick data from Dukascopy, converts it into clean,
 deterministic CSV candle files, and writes a metadata sidecar describing exactly
