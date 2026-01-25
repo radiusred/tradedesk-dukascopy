@@ -26,6 +26,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,6 +39,9 @@ jobs:
 
       - name: Bump version and push
         id: versioning
+        env:
+          # Use the App token for the push command
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -46,9 +50,11 @@ jobs:
           NEW_VERSION=$(hatch version)
           echo "new_tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
           
-          git add .
+          git add -A
           git commit -m "chore: release v$NEW_VERSION"
-          git push origin main
+          
+          # Explicitly use the token in the push URL for maximum reliability
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git main
 
       - name: Create GitHub Release
         env:
