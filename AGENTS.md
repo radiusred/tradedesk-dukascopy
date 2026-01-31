@@ -63,6 +63,7 @@ Performance is secondary to correctness and transparency.
 * No `from __future__ import ...`
 * Prioritise readability and traceability
 * Code should meet `ruff check` and `mypy --strict` requirements
+* Create commit messages for git following "Conventional Commits" and the current style of the project's git log
 
 When suggesting code:
 
