@@ -30,4 +30,4 @@ jobs:
             --cov=tradedesk_dukascopy \
             --cov-report=term-missing \
             --cov-report=xml \
-            --cov-fail-under=47
+            --cov-fail-under=75
