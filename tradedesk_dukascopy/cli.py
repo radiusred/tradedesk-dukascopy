@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--resample",
-        default="5min",
+        default=None,
         help="resample rule (candles only) - the sizing of the output candles, e.g. 5min, 1H, 1D",
     )
     p.add_argument(
@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--out",
-        required=True,
+        default=None,
         help="Output directory for exported CSV and metadata files",
     )
     p.add_argument(
@@ -129,11 +129,15 @@ def _parse_ymd(s: str) -> datetime:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # Validation checks
+    if args.resample is not None and args.out is None:
+        parser.error("--out is required when using --resample")
 
     start_utc = _parse_ymd(args.date_from)
     end_utc = _parse_ymd(args.date_to)
-
     if end_utc < start_utc:
         raise SystemExit("--to must be >= --from")
 
@@ -174,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     # Build export tasks
     from tradedesk_dukascopy.parallel import ExportTask, run_parallel_exports
 
-    out = Path(args.out)
+    out = Path(args.out) if args.out is not None else None
     cache_dir = None if args.no_cache else args.cache_dir
 
     tasks = [

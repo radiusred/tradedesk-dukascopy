@@ -16,8 +16,10 @@ class ExportMetadata:
     generated_at: str
     params: dict[str, Any]
 
+
 def now_iso_utc() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
 
 def write_sidecar(meta: ExportMetadata, outputfile: Path) -> Path:
     sidecar = outputfile.with_suffix(outputfile.suffix + ".meta.json")
