@@ -33,6 +33,8 @@ def test_main_writes_sidecar_when_export_returns_path(monkeypatch, tmp_path: Pat
             "2025-07-01",
             "--to",
             "2025-07-01",
+            "--resample",
+            "5min",
             "--out",
             str(tmp_path),
             "--log-level",
@@ -42,3 +44,35 @@ def test_main_writes_sidecar_when_export_returns_path(monkeypatch, tmp_path: Pat
 
     assert rc == 0
     assert called["sidecar"] is True
+
+
+def test_main_does_not_write_sidecar_when_resample_is_none(monkeypatch, tmp_path: Path) -> None:
+    out_csv = tmp_path / "EURUSD_5MIN.csv"
+    called = {"sidecar": False}
+
+    def fake_export_range(**kwargs):
+        return out_csv
+
+    def fake_write_sidecar(_meta, output_csv):
+        assert output_csv == out_csv
+        called["sidecar"] = True
+        return out_csv.with_suffix(out_csv.suffix + ".meta.json")
+
+    monkeypatch.setattr(cli, "export_range", fake_export_range)
+    monkeypatch.setattr(cli, "write_sidecar", fake_write_sidecar)
+
+    rc = cli.main(  # no --resample or --out
+        [
+            "--symbols",
+            "EURUSD",
+            "--from",
+            "2025-07-01",
+            "--to",
+            "2025-07-01",
+            "--log-level",
+            "info",
+        ]
+    )
+
+    assert rc == 0
+    assert called["sidecar"] is False

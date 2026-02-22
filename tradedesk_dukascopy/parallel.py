@@ -29,11 +29,11 @@ class ExportTask:
     symbol: str
     start_utc: datetime
     end_utc_inclusive: datetime
-    resample_rule: str
+    resample_rule: str | None
     price_side: str
     price_divisor: float
     cache_dir: Path | None
-    out: Path
+    out: Path | None
 
 
 @dataclass

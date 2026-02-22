@@ -441,12 +441,13 @@ def export_range(
             symbol=symbol,
             phase="dl",
         )
-        rs_task_id = progress.add_task(
-            f"[cyan]{symbol}[/] rs",
-            total=hours_total,
-            symbol=symbol,
-            phase="rs",
-        )
+        if resample_rule is not None:
+            rs_task_id = progress.add_task(
+                f"[cyan]{symbol}[/] rs",
+                total=hours_total,
+                symbol=symbol,
+                phase="rs",
+            )
 
     # Normal mode: parallel download
     log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
@@ -492,7 +493,7 @@ def export_range(
     next_to_process = 0  # Index in hours_to_fetch
 
     def _advance_resample_progress() -> None:
-        if progress is not None and rs_task_id is not None:
+        if progress is not None and rs_task_id is not None and resample_rule is not None:
             progress.update(rs_task_id, advance=1)
 
     try:
@@ -589,12 +590,13 @@ def export_range(
                         _advance_resample_progress()
                         continue
 
-                    df = _ticks_to_candles(
-                        ticks, resample_rule=resample_rule, price_side=price_side
-                    )
-                    if not df.empty:
-                        hours_resampled_nonempty += 1
-                        all_frames.append(df)
+                    if resample_rule is not None:
+                        df = _ticks_to_candles(
+                            ticks, resample_rule=resample_rule, price_side=price_side
+                        )
+                        if not df.empty:
+                            hours_resampled_nonempty += 1
+                            all_frames.append(df)
 
                     _advance_resample_progress()
 
@@ -606,19 +608,22 @@ def export_range(
         raise
 
     if not all_frames:
-        raise RuntimeError(
-            f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}"
-        )
+        if resample_rule is not None:
+            raise RuntimeError(
+                f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}"
+            )
+        frames = []
 
-    frames = pd.concat(all_frames).sort_index()
-    start_ts = pd.Timestamp(start_utc)
-    end_ts = pd.Timestamp(end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))
-    frames = frames.loc[start_ts:end_ts]
-    mask = ~frames.index.duplicated(keep="last")
-    frames = frames.loc[mask]
+    else:
+        frames = pd.concat(all_frames).sort_index()
+        start_ts = pd.Timestamp(start_utc)
+        end_ts = pd.Timestamp(end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))
+        frames = frames.loc[start_ts:end_ts]
+        mask = ~frames.index.duplicated(keep="last")
+        frames = frames.loc[mask]
 
-    out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
-    out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
+        out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
+        out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
 
     log.info(
         f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, "
@@ -627,10 +632,12 @@ def export_range(
         f"resampled_nonempty={hours_resampled_nonempty}, candles={len(frames)}"
     )
 
-    out.mkdir(parents=True, exist_ok=True)
-    rule_label = resample_rule.replace(" ", "").upper()
-    out_csv = out / f"{symbol}_{rule_label}.csv"
-    out_reset.to_csv(out_csv, index=False)
+    out_csv = None
+    if resample_rule is not None:
+        out.mkdir(parents=True, exist_ok=True)
+        rule_label = resample_rule.replace(" ", "").upper()
+        out_csv = out / f"{symbol}_{rule_label}.csv"
+        out_reset.to_csv(out_csv, index=False)
+        log.info(f"Wrote: {out_csv}")
 
-    log.info(f"Wrote: {out_csv}")
     return out_csv
