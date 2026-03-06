@@ -455,13 +455,15 @@ def export_range(
     probe: bool = False,
     probe_ticks: int = 10,
     progress: "Progress | None" = None,
-) -> Path | None:
+) -> tuple[Path | None, Path | None]:
     """
-    Export [start_utc, end_utc_inclusive] into one CSV.
+    Export [start_utc, end_utc_inclusive] into two CSVs: one for bid prices, one for ask.
+    Returns (bid_csv, ask_csv); either may be None if no data or resample_rule is None.
 
-    If progress is provided, we create two tasks per symbol:
+    If progress is provided, we create three tasks per symbol:
       - dl: download attempts
       - rs: processing/resampling progress (advances once per hour processed)
+      - write: advances once per output file written (max 2)
 
     Caching strategy (when cache_dir is set):
       - .bi5 tick files are downloaded and cached as before.
@@ -494,9 +496,10 @@ def export_range(
         hour=0, minute=0, second=0, microsecond=0
     )
 
-    # Accumulates 1-minute candle frames (for requested price_side) across all hours.
-    # At the end these are aggregated once to the target resample_rule.
-    all_1min_frames: list[pd.DataFrame] = []
+    # Accumulates 1-minute candle frames (bid and ask) across all hours.
+    # At the end these are each aggregated once to the target resample_rule.
+    all_1min_bid_frames: list[pd.DataFrame] = []
+    all_1min_ask_frames: list[pd.DataFrame] = []
 
     # Per-day tick lists — used for writing daily tick CSVs.
     day_ticks: dict[date, list[Tick]] = {}
@@ -513,7 +516,7 @@ def export_range(
     if probe:
         log.info(f"Running probe for {symbol} starting at {start_utc.isoformat()}")
         _probe(symbol, hours_to_fetch[0:24], cache_dir, probe_ticks, price_divisor)
-        return None
+        return (None, None)
 
     # Pre-check: identify days where a daily tick CSV already exists.
     # Those days skip .bi5 download and decode entirely.
@@ -532,14 +535,15 @@ def export_range(
             log.info(
                 f"{symbol}: all {len(unique_days)} days cached and no resample requested; nothing to do"
             )
-            return None
+            return (None, None)
         rule_label = resample_rule.replace(" ", "").upper()
-        candidate_csv = out / f"{symbol}_{rule_label}.csv"
-        if candidate_csv.exists():
+        bid_csv = out / f"{symbol}_{rule_label}_bid.csv"
+        ask_csv = out / f"{symbol}_{rule_label}_ask.csv"
+        if bid_csv.exists() and ask_csv.exists():
             log.info(
-                f"{symbol}: all {len(unique_days)} days cached and output CSV exists; skipping export"
+                f"{symbol}: all {len(unique_days)} days cached and output CSVs exist; skipping export"
             )
-            return candidate_csv
+            return (bid_csv, ask_csv)
 
     # Create progress tasks if Progress object provided.
     dl_task_id = None
@@ -561,7 +565,7 @@ def export_range(
             )
             write_task_id = progress.add_task(
                 f"[cyan]{symbol}[/] write",
-                total=1,
+                total=2,
                 symbol=symbol,
                 phase="write",
             )
@@ -691,16 +695,21 @@ def export_range(
             # --- Cached day: load daily tick CSV on the last hour of the day ---
             if comp is _DAY_CACHED:
                 hours_loaded_from_cache += 1
-                if is_last_hour_of_day:
+                if is_last_hour_of_day and resample_rule is not None:
                     cached_ticks = _load_daily_ticks(
                         _daily_tick_path(cache_dir, symbol, current_day)  # type: ignore[arg-type]
                     )
                     if cached_ticks:
-                        one_min = _ticks_to_candles(
-                            cached_ticks, resample_rule="1min", price_side=price_side
+                        one_min_bid = _ticks_to_candles(
+                            cached_ticks, resample_rule="1min", price_side="bid"
                         )
-                        if not one_min.empty:
-                            all_1min_frames.append(one_min)
+                        one_min_ask = _ticks_to_candles(
+                            cached_ticks, resample_rule="1min", price_side="ask"
+                        )
+                        if not one_min_bid.empty:
+                            all_1min_bid_frames.append(one_min_bid)
+                        if not one_min_ask.empty:
+                            all_1min_ask_frames.append(one_min_ask)
                 _advance_resample_progress()
                 continue
 
@@ -778,11 +787,16 @@ def export_range(
                     _flush_day(current_day)
                 continue
 
-            # --- Generate 1-minute candles for requested side ---
-            one_min = _ticks_to_candles(ticks, resample_rule="1min", price_side=price_side)
-            if not one_min.empty:
-                hours_resampled_nonempty += 1
-                all_1min_frames.append(one_min)
+            # --- Generate 1-minute candles for bid and ask ---
+            if resample_rule is not None:
+                one_min_bid = _ticks_to_candles(ticks, resample_rule="1min", price_side="bid")
+                one_min_ask = _ticks_to_candles(ticks, resample_rule="1min", price_side="ask")
+                if not one_min_bid.empty or not one_min_ask.empty:
+                    hours_resampled_nonempty += 1
+                if not one_min_bid.empty:
+                    all_1min_bid_frames.append(one_min_bid)
+                if not one_min_ask.empty:
+                    all_1min_ask_frames.append(one_min_ask)
 
             # Store raw ticks for daily CSV writing (when caching)
             if cache_dir is not None:
@@ -818,51 +832,55 @@ def export_range(
     # Flush any remaining hours (e.g. all days were cached, no futures ran)
     _process_ready_hours()
 
-    # Aggregate all accumulated 1-minute frames to the requested resample rule
-    if not all_1min_frames:
-        if resample_rule is not None:
-            raise RuntimeError(
-                f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}"
-            )
-        frames = pd.DataFrame()
-
-    else:
-        all_1min = pd.concat(all_1min_frames).sort_index()
-
-        # Trim to the requested date range
-        start_ts = pd.Timestamp(start_utc)
-        end_ts = pd.Timestamp(end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))
-        all_1min = all_1min.loc[start_ts:end_ts]
-
-        # Aggregate 1-min candles to target resample rule (single pass over full range
-        # avoids boundary artefacts that occur when aggregating hour-by-hour)
-        if resample_rule is not None:
-            frames = _candles_to_candles(all_1min, resample_rule)
-        else:
-            frames = all_1min
-
-        # Deduplication is a safety net; should be a no-op after single-pass aggregation
-        mask = ~frames.index.duplicated(keep="last")
-        frames = frames.loc[mask]
-
     log.info(
         f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, "
         f"missing_200={hours_empty_200}, downloaded={hours_downloaded}, "
         f"decode_failed={hours_decode_failed}, "
         f"resampled_nonempty={hours_resampled_nonempty}, "
-        f"loaded_from_cache={hours_loaded_from_cache}, candles={len(frames)}"
+        f"loaded_from_cache={hours_loaded_from_cache}"
     )
 
-    out_csv = None
-    if resample_rule is not None and not frames.empty:
-        out.mkdir(parents=True, exist_ok=True)
-        rule_label = resample_rule.replace(" ", "").upper()
-        out_csv = out / f"{symbol}_{rule_label}.csv"
+    if resample_rule is None:
+        return (None, None)
+
+    if not all_1min_bid_frames and not all_1min_ask_frames:
+        raise RuntimeError(
+            f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}"
+        )
+
+    out.mkdir(parents=True, exist_ok=True)
+    rule_label = resample_rule.replace(" ", "").upper()
+    start_ts = pd.Timestamp(start_utc)
+    end_ts = pd.Timestamp(end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))
+
+    out_csv_bid: Path | None = None
+    out_csv_ask: Path | None = None
+
+    for side, frames_list in (
+        ("bid", all_1min_bid_frames),
+        ("ask", all_1min_ask_frames),
+    ):
+        if not frames_list:
+            continue
+        all_1min = pd.concat(frames_list).sort_index()
+        all_1min = all_1min.loc[start_ts:end_ts]
+        # Aggregate 1-min candles to target resample rule (single pass over full range
+        # avoids boundary artefacts that occur when aggregating hour-by-hour)
+        frames = _candles_to_candles(all_1min, resample_rule)
+        # Deduplication is a safety net; should be a no-op after single-pass aggregation
+        frames = frames.loc[~frames.index.duplicated(keep="last")]
+        if frames.empty:
+            continue
+        out_csv = out / f"{symbol}_{rule_label}_{side}.csv"
         out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
         out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
         out_reset.to_csv(out_csv, index=False)
-        log.info(f"Wrote: {out_csv}")
+        log.info(f"Wrote: {out_csv} ({len(frames)} candles)")
+        if side == "bid":
+            out_csv_bid = out_csv
+        else:
+            out_csv_ask = out_csv
         if progress is not None and write_task_id is not None:
             progress.update(write_task_id, advance=1)
 
-    return out_csv
+    return (out_csv_bid, out_csv_ask)

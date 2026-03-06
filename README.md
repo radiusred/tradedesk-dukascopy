@@ -110,7 +110,7 @@ your backtest runtime loop:
 
 When run, the tool will fetch new or missing raw data files from Dukascopy for the instrument(s) and periods that you specify. These are always compressed, hourly files. Once fetched, the files are converted to CSV format tick files and aggregated into daily files. When all 24 hour periods are available and the daily CSV file is written to the cache, the raw native files are discarded.
 
-Dukascopy downloads are notoriously slow and unreliable due to rate limiting and limited resources available for their service. This tool has multiple strategies to address and work around those limitations, including retaining the raw files until a full daily file of CSV data can be written. Re-running the same `tradedesk-dc-export` is both safe and efficient - it will only attempt to fill in gaps and will finish very quickly without duplicating downloads or conversions. It will only perform tasks that are needed.
+Dukascopy downloads are notoriously slow and unreliable due to rate limiting and limited resources available for their service. This tool has multiple strategies to address and work around those limitations, including retaining the raw files until a full daily file of CSV data can be written. Re-running the same `tradedesk-dc-export` is both safe and efficient - it will only attempt to fill in gaps and will finish very quickly where downloads or conversions are already cached.
 
 For this to work well though, you should treat the cache directory as a permanent, not a transient store of local market data that can be added to over time. Best practice is to **always** specify a `--cache-dir` that points to your common market data trove wherever you use the tool from.
 
@@ -133,18 +133,19 @@ Every CSV is accompanied by a metadata file describing how it was generated:
 
 ```json
 {
+  "data_type": "candles",
+  "generated_at": "2026-03-06T16:58:50.397630Z",
+  "params": {
+    "date_from": "2026-01-05",
+    "date_to": "2026-01-06",
+    "price_side": "bid",
+    "resample": "15MIN"
+  },
+  "price_divisor": 10.0,
   "schema_version": "1",
   "source": "dukascopy",
-  "symbol": "EURUSD",
-  "data_type": "candles",
-  "timestamp_format": "iso8601_utc",
-  "price_divisor": 100000.0,
-  "generated_at": "2026-01-03T12:34:56Z",
-  "params": {
-    "resample": "5min",
-    "date_from": "2025-01-01",
-    "date_to": "2025-01-31"
-  }
+  "symbol": "GBPUSD",
+  "timestamp_format": "iso8601_utc"
 }
 ```
 

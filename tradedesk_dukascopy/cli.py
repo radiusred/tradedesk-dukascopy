@@ -192,25 +192,28 @@ def main(argv: list[str] | None = None) -> int:
 
         # Write metadata for successful exports
         for result in results:
-            if result.success and result.output_csv is not None:
-                meta = ExportMetadata(
-                    schema_version="1",
-                    source="dukascopy",
-                    symbol=result.symbol,
-                    data_type="candles",
-                    timestamp_format="iso8601_utc",
-                    price_divisor=float(args.price_divisor),
-                    generated_at=now_iso_utc(),
-                    params={
-                        "date_from": args.date_from,
-                        "date_to": args.date_to,
-                        "resample": args.resample,
-                    },
-                )
-                sidecar = write_sidecar(meta, result.output_csv)
-                # Only log in non-TTY mode
-                if not sys.stdout.isatty():
-                    log.info(f"Wrote metadata sidecar: {sidecar}")
+            if result.success:
+                for output_csv in result.output_csvs:
+                    price_side = "bid" if output_csv.stem.endswith("_bid") else "ask"
+                    meta = ExportMetadata(
+                        schema_version="1",
+                        source="dukascopy",
+                        symbol=result.symbol,
+                        data_type="candles",
+                        timestamp_format="iso8601_utc",
+                        price_divisor=float(args.price_divisor),
+                        generated_at=now_iso_utc(),
+                        params={
+                            "date_from": args.date_from,
+                            "date_to": args.date_to,
+                            "resample": args.resample,
+                            "price_side": price_side,
+                        },
+                    )
+                    sidecar = write_sidecar(meta, output_csv)
+                    # Only log in non-TTY mode
+                    if not sys.stdout.isatty():
+                        log.info(f"Wrote metadata sidecar: {sidecar}")
 
         # Summary
         succeeded = sum(1 for r in results if r.success)

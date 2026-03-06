@@ -40,7 +40,7 @@ class ExportResult:
     """Result from exporting a single symbol."""
 
     symbol: str
-    output_csv: Path | None
+    output_csvs: list[Path]
     success: bool
     error: str | None = None
 
@@ -50,7 +50,7 @@ def _export_worker(task: ExportTask, progress: Progress | None = None) -> Export
     from tradedesk_dukascopy.export import export_range
 
     try:
-        output_csv = export_range(
+        bid_csv, ask_csv = export_range(
             symbol=task.symbol,
             start_utc=task.start_utc,
             end_utc_inclusive=task.end_utc_inclusive,
@@ -62,11 +62,12 @@ def _export_worker(task: ExportTask, progress: Progress | None = None) -> Export
             out=task.out,
             progress=progress,
         )
-        return ExportResult(symbol=task.symbol, output_csv=output_csv, success=True)
+        output_csvs = [p for p in (bid_csv, ask_csv) if p is not None]
+        return ExportResult(symbol=task.symbol, output_csvs=output_csvs, success=True)
 
     except Exception as e:
         log.exception(f"Failed to export {task.symbol}")
-        return ExportResult(symbol=task.symbol, output_csv=None, success=False, error=str(e))
+        return ExportResult(symbol=task.symbol, output_csvs=[], success=False, error=str(e))
 
 
 def run_parallel_exports(

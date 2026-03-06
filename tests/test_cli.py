@@ -2,6 +2,8 @@ from datetime import UTC
 from pathlib import Path
 
 import tradedesk_dukascopy.cli as cli
+import tradedesk_dukascopy.parallel as par
+from tradedesk_dukascopy.parallel import ExportResult
 
 
 def test_parse_ymd_sets_utc_timezone() -> None:
@@ -10,19 +12,21 @@ def test_parse_ymd_sets_utc_timezone() -> None:
     assert dt.year == 2025 and dt.month == 7 and dt.day == 1
 
 
-def test_main_writes_sidecar_when_export_returns_path(monkeypatch, tmp_path: Path) -> None:
-    out_csv = tmp_path / "EURUSD_5MIN.csv"
-    called = {"sidecar": False}
+def test_main_writes_sidecar_for_both_bid_and_ask(monkeypatch, tmp_path: Path) -> None:
+    bid_csv = tmp_path / "EURUSD_5MIN_bid.csv"
+    ask_csv = tmp_path / "EURUSD_5MIN_ask.csv"
+    bid_csv.touch()
+    ask_csv.touch()
+    sidecars_written: list[Path] = []
 
-    def fake_export_range(**kwargs):
-        return out_csv
+    def fake_run_parallel_exports(tasks, max_workers):
+        return [ExportResult(symbol="EURUSD", output_csvs=[bid_csv, ask_csv], success=True)]
 
     def fake_write_sidecar(_meta, output_csv):
-        assert output_csv == out_csv
-        called["sidecar"] = True
-        return out_csv.with_suffix(out_csv.suffix + ".meta.json")
+        sidecars_written.append(output_csv)
+        return output_csv.with_suffix(output_csv.suffix + ".meta.json")
 
-    monkeypatch.setattr(cli, "export_range", fake_export_range)
+    monkeypatch.setattr(par, "run_parallel_exports", fake_run_parallel_exports)
     monkeypatch.setattr(cli, "write_sidecar", fake_write_sidecar)
 
     rc = cli.main(
@@ -43,22 +47,22 @@ def test_main_writes_sidecar_when_export_returns_path(monkeypatch, tmp_path: Pat
     )
 
     assert rc == 0
-    assert called["sidecar"] is True
+    assert len(sidecars_written) == 2
+    assert bid_csv in sidecars_written
+    assert ask_csv in sidecars_written
 
 
-def test_main_does_not_write_sidecar_when_resample_is_none(monkeypatch, tmp_path: Path) -> None:
-    out_csv = tmp_path / "EURUSD_5MIN.csv"
-    called = {"sidecar": False}
+def test_main_does_not_write_sidecar_when_no_output_csvs(monkeypatch, tmp_path: Path) -> None:
+    sidecars_written: list[Path] = []
 
-    def fake_export_range(**kwargs):
-        return out_csv
+    def fake_run_parallel_exports(tasks, max_workers):
+        return [ExportResult(symbol="EURUSD", output_csvs=[], success=True)]
 
     def fake_write_sidecar(_meta, output_csv):
-        assert output_csv == out_csv
-        called["sidecar"] = True
-        return out_csv.with_suffix(out_csv.suffix + ".meta.json")
+        sidecars_written.append(output_csv)
+        return output_csv.with_suffix(output_csv.suffix + ".meta.json")
 
-    monkeypatch.setattr(cli, "export_range", fake_export_range)
+    monkeypatch.setattr(par, "run_parallel_exports", fake_run_parallel_exports)
     monkeypatch.setattr(cli, "write_sidecar", fake_write_sidecar)
 
     rc = cli.main(  # no --resample or --out
@@ -75,4 +79,4 @@ def test_main_does_not_write_sidecar_when_resample_is_none(monkeypatch, tmp_path
     )
 
     assert rc == 0
-    assert called["sidecar"] is False
+    assert sidecars_written == []
