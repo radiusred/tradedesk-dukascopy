@@ -69,11 +69,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="resample rule (candles only) - the sizing of the output candles, e.g. 5min, 1H, 1D",
     )
     p.add_argument(
-        "--side",
-        choices=["bid", "ask", "mid"],
-        default="bid",
-    )
-    p.add_argument(
         "--price-divisor",
         type=float,
         default=1.0,
@@ -158,19 +153,17 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--probe mode only supports a single symbol")
 
         symbol = args.symbols[0]
-        out = Path(args.out)
 
         export_range(
             symbol=symbol,
             start_utc=start_utc,
             end_utc_inclusive=end_utc,
             resample_rule=args.resample,
-            price_side=args.side,
             price_divisor=args.price_divisor,
             cache_dir=None if args.no_cache else args.cache_dir,
             probe=True,
             probe_ticks=args.probe_ticks,
-            out=out,
+            out=None,
         )
 
         return 0
@@ -187,7 +180,6 @@ def main(argv: list[str] | None = None) -> int:
             start_utc=start_utc,
             end_utc_inclusive=end_utc,
             resample_rule=args.resample,
-            price_side=args.side,
             price_divisor=args.price_divisor,
             cache_dir=cache_dir,
             out=out,
@@ -213,7 +205,6 @@ def main(argv: list[str] | None = None) -> int:
                         "date_from": args.date_from,
                         "date_to": args.date_to,
                         "resample": args.resample,
-                        "side": args.side,
                     },
                 )
                 sidecar = write_sidecar(meta, result.output_csv)

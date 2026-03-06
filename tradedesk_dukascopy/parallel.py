@@ -30,7 +30,6 @@ class ExportTask:
     start_utc: datetime
     end_utc_inclusive: datetime
     resample_rule: str | None
-    price_side: str
     price_divisor: float
     cache_dir: Path | None
     out: Path | None
@@ -56,7 +55,6 @@ def _export_worker(task: ExportTask, progress: Progress | None = None) -> Export
             start_utc=task.start_utc,
             end_utc_inclusive=task.end_utc_inclusive,
             resample_rule=task.resample_rule,
-            price_side=task.price_side,
             price_divisor=task.price_divisor,
             cache_dir=task.cache_dir,
             probe=False,
