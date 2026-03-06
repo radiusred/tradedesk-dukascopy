@@ -68,8 +68,11 @@ def test_export_range_reports_download_and_resample_progress(tmp_path, monkeypat
         progress=prog,
     )
 
-    assert out_csv is not None
-    assert out_csv.exists()
+    bid_csv, ask_csv = out_csv
+    assert bid_csv is not None and bid_csv.exists()
+    assert ask_csv is not None and ask_csv.exists()
+    assert "_bid" in bid_csv.name
+    assert "_ask" in ask_csv.name
 
     assert len(prog.add_task_calls) == 3
     phases = {fields["phase"] for _desc, _total, fields in prog.add_task_calls}
@@ -79,5 +82,5 @@ def test_export_range_reports_download_and_resample_progress(tmp_path, monkeypat
     for c in prog.update_calls:
         advances_by_task[c.task_id] = advances_by_task.get(c.task_id, 0) + c.advance
 
-    # dl and rs each advance once per hour; write advances once after the CSV is written
-    assert sorted(advances_by_task.values()) == [1, len(hours), len(hours)]
+    # dl and rs each advance once per hour; write advances once per file (bid + ask = 2)
+    assert sorted(advances_by_task.values()) == [2, len(hours), len(hours)]
