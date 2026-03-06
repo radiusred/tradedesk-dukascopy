@@ -71,12 +71,13 @@ def test_export_range_reports_download_and_resample_progress(tmp_path, monkeypat
     assert out_csv is not None
     assert out_csv.exists()
 
-    assert len(prog.add_task_calls) == 2
+    assert len(prog.add_task_calls) == 3
     phases = {fields["phase"] for _desc, _total, fields in prog.add_task_calls}
-    assert phases == {"dl", "rs"}
+    assert phases == {"dl", "rs", "write"}
 
     advances_by_task: dict[int, int] = {}
     for c in prog.update_calls:
         advances_by_task[c.task_id] = advances_by_task.get(c.task_id, 0) + c.advance
 
-    assert sorted(advances_by_task.values()) == [len(hours), len(hours)]
+    # dl and rs each advance once per hour; write advances once after the CSV is written
+    assert sorted(advances_by_task.values()) == [1, len(hours), len(hours)]
