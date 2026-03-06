@@ -25,6 +25,9 @@ dependencies = [
     "requests>=2.32",
     "pandas>=2.2",
     "rich>=14.2",
+    "llm-tldr[dev]>=1.5.2",
+    "mypy>=1.19.1",
+    "ruff>=0.15.2",
 ]
 
 [project.optional-dependencies]
