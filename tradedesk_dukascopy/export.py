@@ -35,7 +35,7 @@ import struct
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -383,13 +383,72 @@ def _probe(
         return None
 
 
+def _daily_tick_path(cache_dir: Path, symbol: str, day: date) -> Path:
+    """Return the path for a daily tick CSV cache file."""
+    return cache_dir / symbol / f"{day.year}" / f"{day.month - 1:02d}" / f"{day.day:02d}_ticks.csv"
+
+
+def _candles_to_candles(df: pd.DataFrame, resample_rule: str) -> pd.DataFrame:
+    """
+    Aggregate OHLCV candle DataFrame to a larger timeframe.
+
+    Uses first/max/min/last/sum aggregation — matching the CandleAggregator
+    pattern in the tradedesk project.
+    """
+    if df.empty:
+        return df
+    rule = resample_rule.strip().lower()
+    out = df.resample(rule).agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    )
+    return out.dropna(subset=["open"])
+
+
+def _write_daily_ticks(ticks: list[Tick], path: Path) -> None:
+    """Atomically write daily tick data to CSV."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df = pd.DataFrame(
+        {
+            "ts": [t.ts.isoformat() for t in ticks],
+            "bid": [t.bid for t in ticks],
+            "ask": [t.ask for t in ticks],
+            "bid_vol": [t.bid_vol for t in ticks],
+            "ask_vol": [t.ask_vol for t in ticks],
+        }
+    )
+    df.to_csv(tmp, index=False)
+    tmp.replace(path)
+
+
+def _load_daily_ticks(path: Path) -> list[Tick] | None:
+    """Read a daily tick CSV. Returns None on missing file or parse error."""
+    try:
+        df = pd.read_csv(path)
+        timestamps = pd.to_datetime(df["ts"], format="ISO8601", utc=True)
+        return [
+            Tick(
+                ts=ts.to_pydatetime().replace(tzinfo=UTC),
+                bid=float(bid),
+                ask=float(ask),
+                bid_vol=float(bv),
+                ask_vol=float(av),
+            )
+            for ts, bid, ask, bv, av in zip(
+                timestamps, df["bid"], df["ask"], df["bid_vol"], df["ask_vol"], strict=True
+            )
+        ]
+    except Exception:
+        return None
+
+
 def export_range(
     *,
     symbol: str,
     start_utc: datetime,
     end_utc_inclusive: datetime,
     out: Path,
-    price_side: str,
+    price_side: str = "bid",
     price_divisor: float = 1.0,
     resample_rule: str,
     cache_dir: Path | None,
@@ -403,6 +462,19 @@ def export_range(
     If progress is provided, we create two tasks per symbol:
       - dl: download attempts
       - rs: processing/resampling progress (advances once per hour processed)
+
+    Caching strategy (when cache_dir is set):
+      - .bi5 tick files are downloaded and cached as before.
+      - After all hours of a day decode successfully, a daily tick CSV file is
+        written (containing raw tick data: ts/bid/ask/bid_vol/ask_vol) and the
+        .bi5 files for that day are deleted.
+      - On subsequent runs, days with a daily tick CSV present skip .bi5
+        download/decode entirely and load ticks from the CSV, converting to
+        candles on the fly.
+      - A day is only committed to a daily tick CSV when every hour has a
+        definitive result (successfully decoded or legitimate empty-200). Hours
+        with 404 or decode failures leave the day uncommitted so the next run
+        can retry.
     """
 
     # counters
@@ -412,6 +484,7 @@ def export_range(
     hours_downloaded = 0
     hours_decode_failed = 0
     hours_resampled_nonempty = 0
+    hours_loaded_from_cache = 0
 
     detected_format: str | None = None
     symbol = _symbol_normalise(symbol)
@@ -421,7 +494,16 @@ def export_range(
         hour=0, minute=0, second=0, microsecond=0
     )
 
-    all_frames: list[pd.DataFrame] = []
+    # Accumulates 1-minute candle frames (for requested price_side) across all hours.
+    # At the end these are aggregated once to the target resample_rule.
+    all_1min_frames: list[pd.DataFrame] = []
+
+    # Per-day tick lists — used for writing daily tick CSVs.
+    day_ticks: dict[date, list[Tick]] = {}
+
+    # Days where at least one hour had a non-definitive result (404 / decode failure).
+    # These days are NOT written to daily CSVs so the next run can retry.
+    day_has_gaps: set[date] = set()
 
     # Collect all hours to download
     hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
@@ -433,9 +515,36 @@ def export_range(
         _probe(symbol, hours_to_fetch[0:24], cache_dir, probe_ticks, price_divisor)
         return None
 
+    # Pre-check: identify days where a daily tick CSV already exists.
+    # Those days skip .bi5 download and decode entirely.
+    days_fully_cached: set[date] = set()
+    unique_days: set[date] = set()
+    if cache_dir is not None:
+        unique_days = {h.date() for h in hours_to_fetch}
+        days_fully_cached = {
+            day for day in unique_days if _daily_tick_path(cache_dir, symbol, day).exists()
+        }
+
+    # Early exit: if every day is cached there may be nothing to (re)generate.
+    if cache_dir is not None and unique_days and days_fully_cached == unique_days:
+        if resample_rule is None:
+            # No output is ever written without a resample rule; cache is complete.
+            log.info(
+                f"{symbol}: all {len(unique_days)} days cached and no resample requested; nothing to do"
+            )
+            return None
+        rule_label = resample_rule.replace(" ", "").upper()
+        candidate_csv = out / f"{symbol}_{rule_label}.csv"
+        if candidate_csv.exists():
+            log.info(
+                f"{symbol}: all {len(unique_days)} days cached and output CSV exists; skipping export"
+            )
+            return candidate_csv
+
     # Create progress tasks if Progress object provided.
     dl_task_id = None
     rs_task_id = None
+    write_task_id = None
     if progress is not None:
         dl_task_id = progress.add_task(
             f"[cyan]{symbol}[/] dl",
@@ -450,12 +559,38 @@ def export_range(
                 symbol=symbol,
                 phase="rs",
             )
+            write_task_id = progress.add_task(
+                f"[cyan]{symbol}[/] write",
+                total=1,
+                symbol=symbol,
+                phase="write",
+            )
+
+    hours_to_download = [h for h in hours_to_fetch if h.date() not in days_fully_cached]
+
+    # last_hour_of_day[d] is the latest hour in hours_to_fetch for date d.
+    # Used to detect when a day's processing is complete.
+    last_hour_of_day: dict[date, datetime] = {h.date(): h for h in hours_to_fetch}
+
+    # Sentinel value stored in hour_data for hours belonging to fully-cached days.
+    _DAY_CACHED = object()
 
     # Normal mode: parallel download
     log.info(f"Exporting {symbol} from {start_utc.isoformat()} to {end_utc_inclusive.isoformat()}")
     log.info(
-        f"{symbol}: fetching {hours_total} hours with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads"
+        f"{symbol}: fetching {len(hours_to_download)} hours "
+        f"({len(days_fully_cached)} days loaded from cache) "
+        f"with {DOWNLOAD_THREADS_PER_INSTRUMENT} threads"
     )
+
+    # Pre-populate hour_data for cached days and advance dl progress immediately.
+    hour_data: dict[datetime, object] = {}
+    for h in hours_to_fetch:
+        if h.date() in days_fully_cached:
+            hour_data[h] = _DAY_CACHED
+    if days_fully_cached and progress is not None and dl_task_id is not None:
+        n_cached_hours = sum(1 for h in hours_to_fetch if h.date() in days_fully_cached)
+        progress.update(dl_task_id, advance=n_cached_hours)
 
     # Download hours in parallel
     def download_hour(hour_start: datetime) -> tuple[datetime, bytes | None]:
@@ -473,12 +608,8 @@ def export_range(
                     / f"{hour_start.hour:02d}h_ticks.bi5"
                 )
 
-            dl_timeout = (2.0, 10.0)
-            dl_retries = 3
+            comp = _download_bi5(url, cache_path=cache_path, timeout=(2.0, 10.0), retries=3)
 
-            comp = _download_bi5(url, cache_path=cache_path, timeout=dl_timeout, retries=dl_retries)
-
-            # Update progress after download attempt
             if progress is not None and dl_task_id is not None:
                 progress.update(dl_task_id, advance=1)
 
@@ -490,17 +621,184 @@ def export_range(
             log.debug(f"Download failed for {hour_start}: {e}")
             return (hour_start, None)
 
-    # Stream downloads as they complete, process in chronological order
-    hour_data: dict[datetime, bytes | None] = {}
     next_to_process = 0  # Index in hours_to_fetch
 
     def _advance_resample_progress() -> None:
         if progress is not None and rs_task_id is not None and resample_rule is not None:
             progress.update(rs_task_id, advance=1)
 
+    def _flush_day(day: date) -> None:
+        """
+        Write daily tick CSV and delete .bi5 files,
+        but only if the day completed without gaps (no 404s or decode failures).
+        """
+        ticks_for_day = day_ticks.pop(day, [])
+        if cache_dir is None or day in day_has_gaps:
+            return
+
+        try:
+            _write_daily_ticks(ticks_for_day, _daily_tick_path(cache_dir, symbol, day))
+        except Exception as e:
+            log.warning(f"{symbol}: failed to write daily tick CSV for {day}: {e}")
+            return
+
+        # Delete .bi5 files for this day now that daily CSVs are in place
+        for h in hours_to_fetch:
+            if h.date() != day:
+                continue
+            bi5_path = (
+                cache_dir
+                / symbol
+                / f"{h.year}"
+                / f"{h.month - 1:02d}"
+                / f"{h.day:02d}"
+                / f"{h.hour:02d}h_ticks.bi5"
+            )
+            if bi5_path.exists():
+                try:
+                    bi5_path.unlink()
+                except OSError:
+                    log.warning(f"{symbol}: could not delete bi5 cache: {bi5_path}")
+
+    def _process_ready_hours() -> None:
+        nonlocal next_to_process, hours_missing_404, hours_empty_200, hours_downloaded
+        nonlocal hours_decode_failed, hours_resampled_nonempty, detected_format
+        nonlocal hours_loaded_from_cache
+
+        while next_to_process < len(hours_to_fetch):
+            current_hour = hours_to_fetch[next_to_process]
+
+            if current_hour not in hour_data:
+                break  # Wait for this hour to download
+
+            comp = hour_data.pop(current_hour)
+            next_to_process += 1
+
+            cache_path = None
+            if cache_dir is not None:
+                cache_path = (
+                    cache_dir
+                    / symbol
+                    / f"{current_hour.year}"
+                    / f"{current_hour.month - 1:02d}"
+                    / f"{current_hour.day:02d}"
+                    / f"{current_hour.hour:02d}h_ticks.bi5"
+                )
+
+            current_day = current_hour.date()
+            is_last_hour_of_day = current_hour == last_hour_of_day[current_day]
+
+            # --- Cached day: load daily tick CSV on the last hour of the day ---
+            if comp is _DAY_CACHED:
+                hours_loaded_from_cache += 1
+                if is_last_hour_of_day:
+                    cached_ticks = _load_daily_ticks(
+                        _daily_tick_path(cache_dir, symbol, current_day)  # type: ignore[arg-type]
+                    )
+                    if cached_ticks:
+                        one_min = _ticks_to_candles(
+                            cached_ticks, resample_rule="1min", price_side=price_side
+                        )
+                        if not one_min.empty:
+                            all_1min_frames.append(one_min)
+                _advance_resample_progress()
+                continue
+
+            # --- 404: no data for this hour ---
+            if comp is None:
+                hours_missing_404 += 1
+                day_has_gaps.add(current_day)
+                _advance_resample_progress()
+                if is_last_hour_of_day:
+                    _flush_day(current_day)
+                continue
+
+            # --- Empty 200: legitimate market-closed hour ---
+            if len(comp) == 0:  # type: ignore[arg-type]
+                hours_empty_200 += 1
+                _advance_resample_progress()
+                if is_last_hour_of_day:
+                    _flush_day(current_day)
+                continue
+
+            hours_downloaded += 1
+
+            if detected_format is None:
+                detected_format = _probe_price_format(comp)  # type: ignore[arg-type]
+                log.info(f"{symbol}: detected tick price format = {detected_format}")
+
+            # --- Decode ticks ---
+            try:
+                assert detected_format is not None
+                ticks = _decode_ticks(
+                    current_hour,
+                    comp,  # type: ignore[arg-type]
+                    price_format=detected_format,
+                    price_divisor=price_divisor,
+                )
+            except lzma.LZMAError:
+                if cache_path is not None and cache_path.exists():
+                    try:
+                        log.warning(f"{symbol}: deleting suspect cache file: {cache_path}")
+                        cache_path.unlink()
+                    except OSError:
+                        log.error(f"{symbol}: rm failed: suspect cache file: {cache_path}")
+
+                comp2 = _download_bi5(
+                    _dukascopy_tick_url(symbol, current_hour), cache_path=cache_path
+                )
+                if comp2 is None:
+                    day_has_gaps.add(current_day)
+                    _advance_resample_progress()
+                    if is_last_hour_of_day:
+                        _flush_day(current_day)
+                    continue
+
+                try:
+                    ticks = _decode_ticks(
+                        current_hour,
+                        comp2,
+                        price_format=detected_format,
+                        price_divisor=price_divisor,
+                    )
+                except Exception as e:
+                    log.warning(f"corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
+                    hours_decode_failed += 1
+                    day_has_gaps.add(current_day)
+                    _advance_resample_progress()
+                    if is_last_hour_of_day:
+                        _flush_day(current_day)
+                    continue
+            except Exception as e:
+                log.warning(f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
+                hours_decode_failed += 1
+                day_has_gaps.add(current_day)
+                _advance_resample_progress()
+                if is_last_hour_of_day:
+                    _flush_day(current_day)
+                continue
+
+            # --- Generate 1-minute candles for requested side ---
+            one_min = _ticks_to_candles(ticks, resample_rule="1min", price_side=price_side)
+            if not one_min.empty:
+                hours_resampled_nonempty += 1
+                all_1min_frames.append(one_min)
+
+            # Store raw ticks for daily CSV writing (when caching)
+            if cache_dir is not None:
+                day_ticks.setdefault(current_day, []).extend(ticks)
+
+            _advance_resample_progress()
+
+            if (current_hour.hour % 24 == 0) and progress is None:
+                log.info(f"{symbol}: processed up to {current_hour.isoformat()}")
+
+            if is_last_hour_of_day:
+                _flush_day(current_day)
+
     try:
         with ThreadPoolExecutor(max_workers=DOWNLOAD_THREADS_PER_INSTRUMENT) as executor:
-            futures = {executor.submit(download_hour, h): h for h in hours_to_fetch}
+            futures = {executor.submit(download_hour, h): h for h in hours_to_download}
 
             for future in as_completed(futures):
                 from tradedesk_dukascopy.parallel import _cancellation_event
@@ -511,135 +809,60 @@ def export_range(
                 hour_start, comp = future.result()
                 hour_data[hour_start] = comp
 
-                while next_to_process < len(hours_to_fetch):
-                    current_hour = hours_to_fetch[next_to_process]
-
-                    if current_hour not in hour_data:
-                        break  # Wait for this hour to download
-
-                    comp = hour_data.pop(current_hour)
-                    next_to_process += 1
-
-                    cache_path = None
-                    if cache_dir is not None:
-                        cache_path = (
-                            cache_dir
-                            / symbol
-                            / f"{current_hour.year}"
-                            / f"{current_hour.month - 1:02d}"
-                            / f"{current_hour.day:02d}"
-                            / f"{current_hour.hour:02d}h_ticks.bi5"
-                        )
-
-                    if comp is None:
-                        hours_missing_404 += 1
-                        _advance_resample_progress()
-                        continue
-
-                    if len(comp) == 0:
-                        hours_empty_200 += 1
-                        _advance_resample_progress()
-                        continue
-
-                    hours_downloaded += 1
-
-                    if detected_format is None:
-                        detected_format = _probe_price_format(comp)
-                        log.info(f"{symbol}: detected tick price format = {detected_format}")
-
-                    try:
-                        assert detected_format is not None
-                        ticks = _decode_ticks(
-                            current_hour,
-                            comp,
-                            price_format=detected_format,
-                            price_divisor=price_divisor,
-                        )
-                    except lzma.LZMAError:
-                        if cache_path is not None and cache_path.exists():
-                            try:
-                                log.warning(f"{symbol}: deleting suspect cache file: {cache_path}")
-                                cache_path.unlink()
-                            except OSError:
-                                log.error(f"{symbol}: rm failed: suspect cache file: {cache_path}")
-
-                        comp2 = _download_bi5(
-                            _dukascopy_tick_url(symbol, current_hour), cache_path=cache_path
-                        )
-                        if comp2 is None:
-                            _advance_resample_progress()
-                            continue
-
-                        try:
-                            ticks = _decode_ticks(
-                                current_hour,
-                                comp2,
-                                price_format=detected_format,
-                                price_divisor=price_divisor,
-                            )
-                        except Exception as e:
-                            log.warning(
-                                f"corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}"
-                            )
-                            hours_decode_failed += 1
-                            _advance_resample_progress()
-                            continue
-                    except Exception as e:
-                        log.warning(
-                            f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}"
-                        )
-                        hours_decode_failed += 1
-                        _advance_resample_progress()
-                        continue
-
-                    if resample_rule is not None:
-                        df = _ticks_to_candles(
-                            ticks, resample_rule=resample_rule, price_side=price_side
-                        )
-                        if not df.empty:
-                            hours_resampled_nonempty += 1
-                            all_frames.append(df)
-
-                    _advance_resample_progress()
-
-                    if (current_hour.hour % 24 == 0) and progress is None:
-                        log.info(f"{symbol}: processed up to {current_hour.isoformat()}")
+                _process_ready_hours()
 
     except KeyboardInterrupt:
         log.warning(f"{symbol}: download interrupted")
         raise
 
-    if not all_frames:
+    # Flush any remaining hours (e.g. all days were cached, no futures ran)
+    _process_ready_hours()
+
+    # Aggregate all accumulated 1-minute frames to the requested resample rule
+    if not all_1min_frames:
         if resample_rule is not None:
             raise RuntimeError(
                 f"No data produced for symbol={symbol} in range {start_utc}..{end_utc_inclusive}"
             )
-        frames = []
+        frames = pd.DataFrame()
 
     else:
-        frames = pd.concat(all_frames).sort_index()
+        all_1min = pd.concat(all_1min_frames).sort_index()
+
+        # Trim to the requested date range
         start_ts = pd.Timestamp(start_utc)
         end_ts = pd.Timestamp(end_utc_inclusive + timedelta(days=1) - timedelta(microseconds=1))
-        frames = frames.loc[start_ts:end_ts]
+        all_1min = all_1min.loc[start_ts:end_ts]
+
+        # Aggregate 1-min candles to target resample rule (single pass over full range
+        # avoids boundary artefacts that occur when aggregating hour-by-hour)
+        if resample_rule is not None:
+            frames = _candles_to_candles(all_1min, resample_rule)
+        else:
+            frames = all_1min
+
+        # Deduplication is a safety net; should be a no-op after single-pass aggregation
         mask = ~frames.index.duplicated(keep="last")
         frames = frames.loc[mask]
-
-        out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
-        out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
 
     log.info(
         f"{symbol}: hours total={hours_total}, missing_404={hours_missing_404}, "
         f"missing_200={hours_empty_200}, downloaded={hours_downloaded}, "
         f"decode_failed={hours_decode_failed}, "
-        f"resampled_nonempty={hours_resampled_nonempty}, candles={len(frames)}"
+        f"resampled_nonempty={hours_resampled_nonempty}, "
+        f"loaded_from_cache={hours_loaded_from_cache}, candles={len(frames)}"
     )
 
     out_csv = None
-    if resample_rule is not None:
+    if resample_rule is not None and not frames.empty:
         out.mkdir(parents=True, exist_ok=True)
         rule_label = resample_rule.replace(" ", "").upper()
         out_csv = out / f"{symbol}_{rule_label}.csv"
+        out_reset = frames.reset_index().rename(columns={"index": "timestamp"})
+        out_reset["timestamp"] = out_reset["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S+00:00")
         out_reset.to_csv(out_csv, index=False)
         log.info(f"Wrote: {out_csv}")
+        if progress is not None and write_task_id is not None:
+            progress.update(write_task_id, advance=1)
 
     return out_csv
