@@ -1,0 +1,338 @@
+"""
+Integration tests for the daily-tick-CSV caching layer in export_range.
+
+These tests exercise:
+  - Daily tick CSV written + .bi5 files deleted after a gapless day
+  - Daily tick CSV NOT written when a day has 404 hours (gap prevention)
+  - Early exit when all days are cached and output CSVs already exist
+  - Early exit (None, None) when all days are cached and no resample is requested
+"""
+
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+import tradedesk_dukascopy.export as ex
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_tick(ts: datetime) -> ex.Tick:
+    return ex.Tick(ts=ts, bid=1.1000, ask=1.1005, bid_vol=1.0, ask_vol=1.0)
+
+
+def _patch_download_and_decode(monkeypatch, *, return_none_for_hour: datetime | None = None):
+    """
+    Patch _download_bi5, _probe_price_format, and _decode_ticks so that
+    export_range can run without real network or LZMA data.
+
+    If return_none_for_hour is set, that hour's download returns None (404).
+    The fake downloader also writes a sentinel .bi5 file to cache so that
+    _flush_day has something to delete.
+    """
+
+    def fake_download(url, *, cache_path, **kwargs):
+        hour_str = url.split("/")[-1]  # e.g. "00h_ticks.bi5"
+        if return_none_for_hour is not None and f"{return_none_for_hour.hour:02d}h" in hour_str:
+            return None
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(b"fake")
+        return b"fake"
+
+    monkeypatch.setattr(ex, "_download_bi5", fake_download)
+    monkeypatch.setattr(ex, "_probe_price_format", lambda *_: "float")
+
+    def fake_decode(hour_start, _comp, *, price_format, price_divisor):
+        return [_make_tick(hour_start)]
+
+    monkeypatch.setattr(ex, "_decode_ticks", fake_decode)
+
+
+# ---------------------------------------------------------------------------
+# Cache lifecycle: daily CSV written, .bi5 deleted
+# ---------------------------------------------------------------------------
+
+
+def test_daily_csv_written_and_bi5_deleted_after_complete_day(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+    _patch_download_and_decode(monkeypatch)
+
+    ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    daily_csv = ex._daily_tick_path(cache_dir, "EURUSD", start.date())
+    assert daily_csv.exists(), "daily tick CSV must be written after a complete day"
+
+    # The fake downloader wrote .bi5 files; _flush_day should have deleted them.
+    for h in hours:
+        bi5 = (
+            cache_dir
+            / "EURUSD"
+            / str(h.year)
+            / f"{h.month - 1:02d}"
+            / f"{h.day:02d}"
+            / f"{h.hour:02d}h_ticks.bi5"
+        )
+        assert not bi5.exists(), f".bi5 file should be deleted after flush: {bi5}"
+
+
+def test_daily_csv_contains_ticks_from_all_hours(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start + timedelta(hours=i) for i in range(3)]
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+    _patch_download_and_decode(monkeypatch)
+
+    ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=2),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    daily_csv = ex._daily_tick_path(cache_dir, "EURUSD", start.date())
+    ticks = ex._load_daily_ticks(daily_csv)
+    assert ticks is not None
+    # One fake tick per hour.
+    assert len(ticks) == len(hours)
+
+
+# ---------------------------------------------------------------------------
+# Gap prevention: 404 hours stop daily CSV being committed
+# ---------------------------------------------------------------------------
+
+
+def test_daily_csv_not_written_when_day_has_404_hour(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+    # Hour 00 returns 404 (None).
+    _patch_download_and_decode(monkeypatch, return_none_for_hour=start)
+
+    ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    daily_csv = ex._daily_tick_path(cache_dir, "EURUSD", start.date())
+    assert not daily_csv.exists(), "daily tick CSV must NOT be written when a 404 hour exists"
+
+
+# ---------------------------------------------------------------------------
+# Early exit: all days cached + output CSVs exist
+# ---------------------------------------------------------------------------
+
+
+def test_early_exit_returns_existing_csvs_when_all_cached(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+
+    # Pre-create the daily tick CSV so the day appears fully cached.
+    daily_csv = ex._daily_tick_path(cache_dir, "EURUSD", start.date())
+    daily_csv.parent.mkdir(parents=True, exist_ok=True)
+    ex._write_daily_ticks([_make_tick(start)], daily_csv)
+
+    # Pre-create output CSVs.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bid_csv = out_dir / "EURUSD_1MIN_bid.csv"
+    ask_csv = out_dir / "EURUSD_1MIN_ask.csv"
+    bid_csv.write_text("existing")
+    ask_csv.write_text("existing")
+
+    download_calls = {"n": 0}
+
+    def fake_download(*_, **__):
+        download_calls["n"] += 1
+        return b"should_not_be_called"
+
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "_download_bi5", fake_download)
+
+    result = ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    assert result == (bid_csv, ask_csv)
+    assert download_calls["n"] == 0, "early exit must skip all downloads"
+
+
+def test_early_exit_still_processes_when_only_one_output_csv_missing(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+
+    daily_csv = ex._daily_tick_path(cache_dir, "EURUSD", start.date())
+    daily_csv.parent.mkdir(parents=True, exist_ok=True)
+    ex._write_daily_ticks([_make_tick(start)], daily_csv)
+
+    # Only bid CSV exists; ask is missing → must not early-exit.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "EURUSD_1MIN_bid.csv").write_text("existing")
+
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+    # Patch decode so cached-day load path works.
+    monkeypatch.setattr(ex, "_probe_price_format", lambda *_: "float")
+    monkeypatch.setattr(ex, "_decode_ticks", lambda h, _c, **__: [_make_tick(h)])
+
+    bid_csv, ask_csv = ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    assert ask_csv is not None and ask_csv.exists()
+
+
+# ---------------------------------------------------------------------------
+# Early exit: no resample requested + all days cached
+# ---------------------------------------------------------------------------
+
+
+def test_early_exit_returns_none_tuple_when_no_resample_and_all_cached(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+
+    daily_csv = ex._daily_tick_path(cache_dir, "EURUSD", start.date())
+    daily_csv.parent.mkdir(parents=True, exist_ok=True)
+    ex._write_daily_ticks([_make_tick(start)], daily_csv)
+
+    download_calls = {"n": 0}
+
+    def fake_download(*_, **__):
+        download_calls["n"] += 1
+        return b"should_not_be_called"
+
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "_download_bi5", fake_download)
+
+    result = ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=tmp_path / "out",
+        price_divisor=1.0,
+        resample_rule=None,
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    assert result == (None, None)
+    assert download_calls["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Output CSV filenames include _bid / _ask
+# ---------------------------------------------------------------------------
+
+
+def test_output_csv_filenames_include_bid_and_ask_suffixes(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+    _patch_download_and_decode(monkeypatch)
+
+    bid_csv, ask_csv = ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    assert bid_csv is not None and "_bid" in bid_csv.name
+    assert ask_csv is not None and "_ask" in ask_csv.name
+    assert bid_csv.exists()
+    assert ask_csv.exists()
+
+
+# ---------------------------------------------------------------------------
+# No resample: returns (None, None), no output files written
+# ---------------------------------------------------------------------------
+
+
+def test_no_resample_returns_none_tuple_and_writes_no_csv(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    hours = [start, start + timedelta(hours=1)]
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "DOWNLOAD_THREADS_PER_INSTRUMENT", 1)
+    _patch_download_and_decode(monkeypatch)
+
+    result = ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule=None,
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    assert result == (None, None)
+    assert not out_dir.exists() or not any(out_dir.iterdir())

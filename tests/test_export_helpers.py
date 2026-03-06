@@ -153,3 +153,93 @@ def test_ticks_to_candles_invalid_price_side_raises() -> None:
 
     with pytest.raises(ValueError, match="price_side must be one of"):
         ex._ticks_to_candles(ticks, resample_rule="1min", price_side="nope")
+
+
+# ---------------------------------------------------------------------------
+# _candles_to_candles
+# ---------------------------------------------------------------------------
+
+
+def test_candles_to_candles_aggregates_ohlcv_correctly() -> None:
+    # Five consecutive 1-min candles aggregated to a single 5-min bar.
+    base = pd.Timestamp("2025-01-01T00:00:00", tz="UTC")
+    idx = pd.date_range(base, periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "high": [1.9, 2.9, 3.9, 4.9, 5.9],
+            "low": [0.1, 1.1, 2.1, 3.1, 4.1],
+            "close": [1.5, 2.5, 3.5, 4.5, 5.5],
+            "volume": [10.0, 20.0, 30.0, 40.0, 50.0],
+        },
+        index=idx,
+    )
+
+    out = ex._candles_to_candles(df, "5min")
+
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["open"] == 1.0  # first open
+    assert row["high"] == 5.9  # max high
+    assert row["low"] == 0.1  # min low
+    assert row["close"] == 5.5  # last close
+    assert row["volume"] == 150.0  # sum
+
+
+def test_candles_to_candles_empty_returns_empty() -> None:
+    df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    out = ex._candles_to_candles(df, "5min")
+    assert out.empty
+
+
+# ---------------------------------------------------------------------------
+# _write_daily_ticks / _load_daily_ticks round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_write_and_load_daily_ticks_round_trip(tmp_path: Path) -> None:
+    base = datetime(2025, 6, 15, 12, 0, tzinfo=UTC)
+    original = [
+        ex.Tick(
+            ts=base + timedelta(milliseconds=100 * i),
+            bid=1.1 + i * 0.001,
+            ask=1.101 + i * 0.001,
+            bid_vol=float(i + 1),
+            ask_vol=float(i + 2),
+        )
+        for i in range(5)
+    ]
+    path = tmp_path / "2025" / "05" / "15_ticks.csv"
+
+    ex._write_daily_ticks(original, path)
+    assert path.exists()
+
+    loaded = ex._load_daily_ticks(path)
+    assert loaded is not None
+    assert len(loaded) == len(original)
+
+    for orig, got in zip(original, loaded):
+        assert got.ts == orig.ts
+        assert abs(got.bid - orig.bid) < 1e-6
+        assert abs(got.ask - orig.ask) < 1e-6
+        assert abs(got.bid_vol - orig.bid_vol) < 1e-9
+        assert abs(got.ask_vol - orig.ask_vol) < 1e-9
+
+
+def test_load_daily_ticks_returns_none_for_missing_file(tmp_path: Path) -> None:
+    result = ex._load_daily_ticks(tmp_path / "nonexistent.csv")
+    assert result is None
+
+
+def test_write_daily_ticks_is_atomic(tmp_path: Path) -> None:
+    # A .tmp file must not be left behind on success.
+    path = tmp_path / "day_ticks.csv"
+    ticks = [
+        ex.Tick(ts=datetime(2025, 1, 1, tzinfo=UTC), bid=1.0, ask=1.01, bid_vol=1.0, ask_vol=1.0)
+    ]
+
+    ex._write_daily_ticks(ticks, path)
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    assert path.exists()
+    assert not tmp.exists()
