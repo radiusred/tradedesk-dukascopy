@@ -1,6 +1,7 @@
 import lzma
 import struct
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -218,7 +219,7 @@ def test_write_and_load_daily_ticks_round_trip(tmp_path: Path) -> None:
     assert loaded is not None
     assert len(loaded) == len(original)
 
-    for orig, got in zip(original, loaded):
+    for orig, got in zip(original, loaded, strict=True):
         assert got.ts == orig.ts
         assert abs(got.bid - orig.bid) < 1e-6
         assert abs(got.ask - orig.ask) < 1e-6
