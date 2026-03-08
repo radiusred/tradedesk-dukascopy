@@ -32,14 +32,14 @@ def test_daily_tick_path_structure(tmp_path: Path) -> None:
     day = date(2025, 3, 15)
     p = ex._daily_tick_path(tmp_path, "EURUSD", day)
     # Month is zero-based: March (3) → "02"
-    assert p == tmp_path / "EURUSD" / "2025" / "02" / "15_ticks.csv"
+    assert p == tmp_path / "EURUSD" / "2025" / "02" / "15_ticks.csv.zst"
 
 
 def test_daily_tick_path_no_price_side(tmp_path: Path) -> None:
     """Tick path has no price side — a single file holds all sides."""
     day = date(2025, 1, 1)
     p = ex._daily_tick_path(tmp_path, "EURUSD", day)
-    assert p.name == "01_ticks.csv"
+    assert p.name == "01_ticks.csv.zst"
 
 
 # ---------------------------------------------------------------------------

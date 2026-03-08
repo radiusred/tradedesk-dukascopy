@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+import zstandard as zstd
 from rich.progress import Progress
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
@@ -384,8 +385,50 @@ def _probe(
 
 
 def _daily_tick_path(cache_dir: Path, symbol: str, day: date) -> Path:
-    """Return the path for a daily tick CSV cache file."""
-    return cache_dir / symbol / f"{day.year}" / f"{day.month - 1:02d}" / f"{day.day:02d}_ticks.csv"
+    """Return the path for a daily tick CSV cache file (Zstandard compressed)."""
+    return (
+        cache_dir / symbol / f"{day.year}" / f"{day.month - 1:02d}" / f"{day.day:02d}_ticks.csv.zst"
+    )
+
+
+def _migrate_to_compressed(csv_path: Path, zst_path: Path) -> bool:
+    """
+    Compress an existing uncompressed .csv to .csv.zst using Zstandard level 3.
+
+    Atomically replaces the .csv with .csv.zst. Returns True on success.
+    """
+    tmp = zst_path.with_suffix(zst_path.suffix + ".tmp")
+    try:
+        cctx = zstd.ZstdCompressor(level=3)
+        with open(csv_path, "rb") as f_in, open(tmp, "wb") as f_out:
+            cctx.copy_stream(f_in, f_out)
+        tmp.replace(zst_path)
+        csv_path.unlink()
+        return True
+    except Exception as e:
+        log.warning("Failed to migrate %s to compressed format: %s", csv_path, e)
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        return False
+
+
+def _cleanup_empty_day_dirs(cache_dir: Path, symbol: str) -> None:
+    """Remove empty day directories left over after bi5 file deletion."""
+    sym_dir = cache_dir / symbol
+    if not sym_dir.is_dir():
+        return
+    for year_dir in sym_dir.iterdir():
+        if not year_dir.is_dir():
+            continue
+        for month_dir in year_dir.iterdir():
+            if not month_dir.is_dir():
+                continue
+            for day_dir in month_dir.iterdir():
+                if day_dir.is_dir() and not any(day_dir.iterdir()):
+                    try:
+                        day_dir.rmdir()
+                    except OSError:
+                        pass
 
 
 def _candles_to_candles(df: pd.DataFrame, resample_rule: str) -> pd.DataFrame:
@@ -405,7 +448,7 @@ def _candles_to_candles(df: pd.DataFrame, resample_rule: str) -> pd.DataFrame:
 
 
 def _write_daily_ticks(ticks: list[Tick], path: Path) -> None:
-    """Atomically write daily tick data to CSV."""
+    """Atomically write daily tick data as a Zstandard-compressed CSV (level 3)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     df = pd.DataFrame(
@@ -417,14 +460,19 @@ def _write_daily_ticks(ticks: list[Tick], path: Path) -> None:
             "ask_vol": [t.ask_vol for t in ticks],
         }
     )
-    df.to_csv(tmp, index=False)
+    cctx = zstd.ZstdCompressor(level=3)
+    compressed = cctx.compress(df.to_csv(index=False).encode("utf-8"))
+    tmp.write_bytes(compressed)
     tmp.replace(path)
 
 
 def _load_daily_ticks(path: Path) -> list[Tick] | None:
-    """Read a daily tick CSV. Returns None on missing file or parse error."""
+    """Read a Zstandard-compressed daily tick CSV. Returns None on missing file or parse error."""
     try:
-        df = pd.read_csv(path)
+        dctx = zstd.ZstdDecompressor()
+        with open(path, "rb") as f_in:
+            with dctx.stream_reader(f_in) as reader:
+                df = pd.read_csv(io.TextIOWrapper(io.BufferedReader(reader), encoding="utf-8"))
         timestamps = pd.to_datetime(df["ts"], format="ISO8601", utc=True)
         return [
             Tick(
@@ -520,20 +568,29 @@ def export_range(
 
     # Pre-check: identify days where a daily tick CSV already exists.
     # Those days skip .bi5 download and decode entirely.
+    # Migrate any existing uncompressed .csv files to .csv.zst and
+    # remove empty day directories left from previous bi5 cleanup runs.
     days_fully_cached: set[date] = set()
     unique_days: set[date] = set()
     if cache_dir is not None:
         unique_days = {h.date() for h in hours_to_fetch}
-        days_fully_cached = {
-            day for day in unique_days if _daily_tick_path(cache_dir, symbol, day).exists()
-        }
+        for day in unique_days:
+            zst_path = _daily_tick_path(cache_dir, symbol, day)
+            csv_path = zst_path.with_suffix("")  # strip .zst → .csv
+            if zst_path.exists():
+                days_fully_cached.add(day)
+            elif csv_path.exists():
+                if _migrate_to_compressed(csv_path, zst_path):
+                    days_fully_cached.add(day)
+        _cleanup_empty_day_dirs(cache_dir, symbol)
 
     # Early exit: if every day is cached there may be nothing to (re)generate.
     if cache_dir is not None and unique_days and days_fully_cached == unique_days:
         if resample_rule is None:
             # No output is ever written without a resample rule; cache is complete.
             log.info(
-                f"{symbol}: all {len(unique_days)} days cached and no resample requested; nothing to do"
+                f"{symbol}: all {len(unique_days)} days "
+                "cached and no resample requested; nothing to do"
             )
             return (None, None)
         rule_label = resample_rule.replace(" ", "").upper()
@@ -541,7 +598,8 @@ def export_range(
         ask_csv = out / f"{symbol}_{rule_label}_ask.csv"
         if bid_csv.exists() and ask_csv.exists():
             log.info(
-                f"{symbol}: all {len(unique_days)} days cached and output CSVs exist; skipping export"
+                f"{symbol}: all {len(unique_days)} days "
+                "cached and output CSVs exist; skipping export"
             )
             return (bid_csv, ask_csv)
 
@@ -549,6 +607,7 @@ def export_range(
     dl_task_id = None
     rs_task_id = None
     write_task_id = None
+    cache_task_id = None
     if progress is not None:
         dl_task_id = progress.add_task(
             f"[cyan]{symbol}[/] dl",
@@ -568,6 +627,14 @@ def export_range(
                 total=2,
                 symbol=symbol,
                 phase="write",
+            )
+        n_days_to_write = len(unique_days - days_fully_cached)
+        if cache_dir is not None and n_days_to_write > 0:
+            cache_task_id = progress.add_task(
+                f"[cyan]{symbol}[/] cache",
+                total=n_days_to_write,
+                symbol=symbol,
+                phase="cache",
             )
 
     hours_to_download = [h for h in hours_to_fetch if h.date() not in days_fully_cached]
@@ -633,20 +700,29 @@ def export_range(
 
     def _flush_day(day: date) -> None:
         """
-        Write daily tick CSV and delete .bi5 files,
+        Write daily tick CSV (compressed) and delete .bi5 files + day directory,
         but only if the day completed without gaps (no 404s or decode failures).
+        Always advances the cache progress task.
         """
         ticks_for_day = day_ticks.pop(day, [])
+
+        def _advance_cache_progress() -> None:
+            if progress is not None and cache_task_id is not None:
+                progress.update(cache_task_id, advance=1)
+
         if cache_dir is None or day in day_has_gaps:
+            _advance_cache_progress()
             return
 
         try:
             _write_daily_ticks(ticks_for_day, _daily_tick_path(cache_dir, symbol, day))
         except Exception as e:
             log.warning(f"{symbol}: failed to write daily tick CSV for {day}: {e}")
+            _advance_cache_progress()
             return
 
-        # Delete .bi5 files for this day now that daily CSVs are in place
+        # Delete .bi5 files for this day and remove the now-empty day directory
+        day_dir: Path | None = None
         for h in hours_to_fetch:
             if h.date() != day:
                 continue
@@ -658,11 +734,21 @@ def export_range(
                 / f"{h.day:02d}"
                 / f"{h.hour:02d}h_ticks.bi5"
             )
+            if day_dir is None:
+                day_dir = bi5_path.parent
             if bi5_path.exists():
                 try:
                     bi5_path.unlink()
                 except OSError:
                     log.warning(f"{symbol}: could not delete bi5 cache: {bi5_path}")
+
+        if day_dir is not None:
+            try:
+                day_dir.rmdir()
+            except OSError:
+                pass  # Not empty or already gone; that's fine
+
+        _advance_cache_progress()
 
     def _process_ready_hours() -> None:
         nonlocal next_to_process, hours_missing_404, hours_empty_200, hours_downloaded

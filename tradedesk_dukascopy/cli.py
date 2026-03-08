@@ -1,6 +1,5 @@
 import argparse
 import logging
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -89,8 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--workers",
         type=int,
-        default=None,
-        help="Max parallel instrument workers (default: CPU count - 2, min 1)",
+        default=4,
+        help="Max parallel instrument workers (default: 4)",
     )
     p.add_argument(
         "--probe",
@@ -139,10 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(level=args.log_level.upper())
 
     # Determine worker count
-    if args.workers is None:
-        workers = max(1, (os.cpu_count() or 2) - 2)
-    else:
-        workers = max(1, args.workers)
+    workers = max(1, args.workers)
 
     log = logging.getLogger(__name__)
     log.info(f"Processing {len(args.symbols)} symbols with up to {workers} workers")
