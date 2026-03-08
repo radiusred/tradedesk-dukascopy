@@ -28,6 +28,7 @@ dependencies = [
     "llm-tldr[dev]>=1.5.2",
     "mypy>=1.19.1",
     "ruff>=0.15.2",
+    "zstandard>=0.25.0",
 ]
 
 [project.optional-dependencies]
