@@ -30,16 +30,36 @@ The goal of this session is to retain the beneficial cache format improvement bu
 
 All 78 tests pass. Here's a summary of everything implemented:
 
-export.py changes:
+### export.py changes:
 
-import zstandard as zstd added
-_daily_tick_path — extension changed to .csv.zst
-_migrate_to_compressed(csv_path, zst_path) — compresses existing uncompressed .csv → .csv.zst atomically via copy_stream, deletes original; returns False and cleans up .tmp on failure
-_cleanup_empty_day_dirs(cache_dir, symbol) — removes empty day directories left over from previous bi5 deletion runs
-_write_daily_ticks — now compresses with ZstdCompressor(level=3)
-_load_daily_ticks — decompresses via stream_reader wrapped in io.TextIOWrapper(io.BufferedReader(...)) as specified
-days_fully_cached check — migrates any existing uncompressed .csv files during startup, then calls _cleanup_empty_day_dirs
-cache_task_id progress task — fourth task per symbol ([cyan]SYMBOL[/] cache), total = days not already cached, advances in _flush_day for every day (including gapped days, so it always reaches 100%)
-_flush_day — after deleting bi5 files, attempts day_dir.rmdir() to remove the now-empty directory
+- import zstandard as zstd added
+- `_daily_tick_path` — extension changed to `.csv.zst`
+- `_migrate_to_compressed(csv_path, zst_path)` — compresses existing uncompressed `.csv` → `.csv.zst` atomically via copy_stream, deletes original; returns False and cleans up .tmp on failure
+- `_cleanup_empty_day_dirs(cache_dir, symbol)` — removes empty day directories left over from previous bi5 deletion runs
+- `_write_daily_ticks` — now compresses with ZstdCompressor(level=3)
+- `_load_daily_ticks` — decompresses via stream_reader wrapped in `io.TextIOWrapper(io.BufferedReader(...))` as specified
+- `days_fully_cached check` — migrates any existing uncompressed `.csv` files during startup, then calls `_cleanup_empty_day_dirs`
+- `cache_task_id` progress task — fourth task per symbol ([cyan]SYMBOL[/] cache), total = days not already cached, advances in `_flush_day` for every day (including gapped days, so it always reaches 100%)
+- `_flush_day` — after deleting `bi5` files, attempts `day_dir.rmdir()` to remove the now-empty directory
 
-New test file: tests/test_compression.py — covers write/load round-trip, corrupt file handling, migration (success, failure, tmp cleanup), and empty dir cleanup.
+New test file: `tests/test_compression.py` — covers write/load round-trip, corrupt file handling, migration (success, failure, tmp cleanup), and empty dir cleanup.
+
+
+## Cost
+
+| Metric | Details |
+| :--- | :--- |
+| Total Cost | **$2.57** |
+| Total Duration (API) | **7m 13s** |
+| Total Code Changes | **275 lines added, 13 lines removed** |
+
+### Usage by Model 
+
+**claude-sonnet-4-6:**
+
+| Type | Tokens |
+| :--- | :--- |
+| Input | 3.0k |
+| Output | 27.9k |
+| Cache Read | 2.2m |
+| Cache Write | 121.9k |
