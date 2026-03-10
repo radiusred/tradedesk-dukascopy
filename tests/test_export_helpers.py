@@ -194,52 +194,55 @@ def test_candles_to_candles_empty_returns_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _write_daily_ticks / _load_daily_ticks round-trip
+# _write_daily_candles / _load_daily_candles round-trip
 # ---------------------------------------------------------------------------
 
 
-def test_write_and_load_daily_ticks_round_trip(tmp_path: Path) -> None:
-    base = datetime(2025, 6, 15, 12, 0, tzinfo=UTC)
-    original = [
-        ex.Tick(
-            ts=base + timedelta(milliseconds=100 * i),
-            bid=1.1 + i * 0.001,
-            ask=1.101 + i * 0.001,
-            bid_vol=float(i + 1),
-            ask_vol=float(i + 2),
-        )
-        for i in range(5)
-    ]
-    path = tmp_path / "2025" / "05" / "15_ticks.csv"
+def test_write_and_load_daily_candles_round_trip(tmp_path: Path) -> None:
+    import pandas as pd
 
-    ex._write_daily_ticks(original, path)
+    base = pd.Timestamp(datetime(2025, 6, 15, 12, 0, tzinfo=UTC))
+    idx = pd.date_range(base, periods=5, freq="1min")
+    original = pd.DataFrame(
+        {
+            "open": [1.1 + i * 0.001 for i in range(5)],
+            "high": [1.11 + i * 0.001 for i in range(5)],
+            "low": [1.09 + i * 0.001 for i in range(5)],
+            "close": [1.105 + i * 0.001 for i in range(5)],
+            "volume": [float(i + 1) for i in range(5)],
+        },
+        index=idx,
+    )
+    path = ex._daily_candle_path(tmp_path, "EURUSD", datetime(2025, 6, 15).date(), "bid")
+
+    ex._write_daily_candles(original, path)
     assert path.exists()
 
-    loaded = ex._load_daily_ticks(path)
+    loaded = ex._load_daily_candles(path)
     assert loaded is not None
     assert len(loaded) == len(original)
 
-    for orig, got in zip(original, loaded, strict=True):
-        assert got.ts == orig.ts
-        assert abs(got.bid - orig.bid) < 1e-6
-        assert abs(got.ask - orig.ask) < 1e-6
-        assert abs(got.bid_vol - orig.bid_vol) < 1e-9
-        assert abs(got.ask_vol - orig.ask_vol) < 1e-9
+    for col in ("open", "high", "low", "close", "volume"):
+        for orig, got in zip(original[col], loaded[col]):
+            assert abs(orig - got) < 1e-6
 
 
-def test_load_daily_ticks_returns_none_for_missing_file(tmp_path: Path) -> None:
-    result = ex._load_daily_ticks(tmp_path / "nonexistent.csv")
+def test_load_daily_candles_returns_none_for_missing_file(tmp_path: Path) -> None:
+    result = ex._load_daily_candles(tmp_path / "nonexistent.csv.zst")
     assert result is None
 
 
-def test_write_daily_ticks_is_atomic(tmp_path: Path) -> None:
-    # A .tmp file must not be left behind on success.
-    path = tmp_path / "day_ticks.csv"
-    ticks = [
-        ex.Tick(ts=datetime(2025, 1, 1, tzinfo=UTC), bid=1.0, ask=1.01, bid_vol=1.0, ask_vol=1.0)
-    ]
+def test_write_daily_candles_is_atomic(tmp_path: Path) -> None:
+    import pandas as pd
 
-    ex._write_daily_ticks(ticks, path)
+    base = pd.Timestamp(datetime(2025, 1, 1, tzinfo=UTC))
+    candles = pd.DataFrame(
+        {"open": [1.0], "high": [1.01], "low": [0.99], "close": [1.005], "volume": [1.0]},
+        index=pd.DatetimeIndex([base], tz="UTC"),
+    )
+    path = ex._daily_candle_path(tmp_path, "EURUSD", datetime(2025, 1, 1).date(), "bid")
+
+    ex._write_daily_candles(candles, path)
 
     tmp = path.with_suffix(path.suffix + ".tmp")
     assert path.exists()

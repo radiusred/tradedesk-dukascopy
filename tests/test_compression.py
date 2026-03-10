@@ -1,4 +1,4 @@
-"""Tests for Zstandard compression of daily tick cache files."""
+"""Tests for Zstandard compression of daily candle cache files."""
 
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -14,46 +14,51 @@ import tradedesk_dukascopy.export as ex
 # ---------------------------------------------------------------------------
 
 
-def _make_ticks(n: int = 3) -> list[ex.Tick]:
-    base = datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC)
-    from datetime import timedelta
-
-    return [
-        ex.Tick(
-            ts=base + timedelta(seconds=i),
-            bid=1.1000 + i * 0.0001,
-            ask=1.1001 + i * 0.0001,
-            bid_vol=float(i + 1),
-            ask_vol=float(i + 2),
-        )
-        for i in range(n)
-    ]
+def _make_candles(n: int = 5) -> pd.DataFrame:
+    base = pd.Timestamp(datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC))
+    idx = pd.date_range(base, periods=n, freq="1min")
+    return pd.DataFrame(
+        {
+            "open": [1.1000 + i * 0.0001 for i in range(n)],
+            "high": [1.1010 + i * 0.0001 for i in range(n)],
+            "low": [1.0990 + i * 0.0001 for i in range(n)],
+            "close": [1.1005 + i * 0.0001 for i in range(n)],
+            "volume": [float(i + 1) for i in range(n)],
+        },
+        index=idx,
+    )
 
 
 # ---------------------------------------------------------------------------
-# _daily_tick_path
+# _daily_candle_path
 # ---------------------------------------------------------------------------
 
 
-def test_daily_tick_path_uses_zst_extension(tmp_path: Path) -> None:
+def test_daily_candle_path_uses_zst_extension_bid(tmp_path: Path) -> None:
     day = date(2025, 6, 15)
-    path = ex._daily_tick_path(tmp_path, "EURUSD", day)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
     assert path.suffix == ".zst"
     assert path.stem.endswith(".csv")
-    assert path.name == "15_ticks.csv.zst"
+    assert path.name == "15_bid.csv.zst"
+
+
+def test_daily_candle_path_uses_zst_extension_ask(tmp_path: Path) -> None:
+    day = date(2025, 6, 15)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "ask")
+    assert path.name == "15_ask.csv.zst"
 
 
 # ---------------------------------------------------------------------------
-# _write_daily_ticks / _load_daily_ticks round-trip
+# _write_daily_candles / _load_daily_candles round-trip
 # ---------------------------------------------------------------------------
 
 
 def test_write_and_load_round_trip(tmp_path: Path) -> None:
-    ticks = _make_ticks(5)
+    candles = _make_candles(5)
     day = date(2025, 1, 15)
-    path = ex._daily_tick_path(tmp_path, "EURUSD", day)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
 
-    ex._write_daily_ticks(ticks, path)
+    ex._write_daily_candles(candles, path)
 
     assert path.exists()
     assert not path.with_suffix("").exists(), "uncompressed .csv must not exist"
@@ -61,85 +66,26 @@ def test_write_and_load_round_trip(tmp_path: Path) -> None:
     # File must be valid zstd
     dctx = zstd.ZstdDecompressor()
     raw = dctx.decompress(path.read_bytes())
-    assert b"bid" in raw  # CSV header present
+    assert b"open" in raw  # CSV header present
 
-    loaded = ex._load_daily_ticks(path)
+    loaded = ex._load_daily_candles(path)
     assert loaded is not None
-    assert len(loaded) == len(ticks)
+    assert len(loaded) == len(candles)
 
-    for orig, got in zip(ticks, loaded, strict=True):
-        assert got.ts == orig.ts
-        assert got.bid == pytest.approx(orig.bid)
-        assert got.ask == pytest.approx(orig.ask)
-        assert got.bid_vol == pytest.approx(orig.bid_vol)
-        assert got.ask_vol == pytest.approx(orig.ask_vol)
+    for col in ("open", "high", "low", "close", "volume"):
+        for orig, got in zip(candles[col], loaded[col], strict=True):
+            assert orig == pytest.approx(got)
 
 
 def test_load_returns_none_for_missing_file(tmp_path: Path) -> None:
-    path = tmp_path / "EURUSD" / "2025" / "00" / "15_ticks.csv.zst"
-    assert ex._load_daily_ticks(path) is None
+    path = tmp_path / "EURUSD" / "2025" / "00" / "15_bid.csv.zst"
+    assert ex._load_daily_candles(path) is None
 
 
 def test_load_returns_none_for_corrupt_file(tmp_path: Path) -> None:
     path = tmp_path / "bad.csv.zst"
     path.write_bytes(b"this is not zstd data")
-    assert ex._load_daily_ticks(path) is None
-
-
-# ---------------------------------------------------------------------------
-# _migrate_to_compressed
-# ---------------------------------------------------------------------------
-
-
-def test_migrate_compresses_csv_and_removes_original(tmp_path: Path) -> None:
-    csv_path = tmp_path / "15_ticks.csv"
-    zst_path = tmp_path / "15_ticks.csv.zst"
-
-    # Write a plain CSV
-    ticks = _make_ticks(4)
-    df = pd.DataFrame(
-        {
-            "ts": [t.ts.isoformat() for t in ticks],
-            "bid": [t.bid for t in ticks],
-            "ask": [t.ask for t in ticks],
-            "bid_vol": [t.bid_vol for t in ticks],
-            "ask_vol": [t.ask_vol for t in ticks],
-        }
-    )
-    df.to_csv(csv_path, index=False)
-
-    result = ex._migrate_to_compressed(csv_path, zst_path)
-
-    assert result is True
-    assert zst_path.exists()
-    assert not csv_path.exists()
-
-    # Verify contents survive the migration
-    loaded = ex._load_daily_ticks(zst_path)
-    assert loaded is not None
-    assert len(loaded) == 4
-    for orig, got in zip(ticks, loaded, strict=True):
-        assert got.bid == pytest.approx(orig.bid)
-
-
-def test_migrate_returns_false_on_unreadable_source(tmp_path: Path) -> None:
-    csv_path = tmp_path / "nonexistent.csv"
-    zst_path = tmp_path / "nonexistent.csv.zst"
-
-    result = ex._migrate_to_compressed(csv_path, zst_path)
-
-    assert result is False
-    assert not zst_path.exists()
-
-
-def test_migrate_cleans_up_tmp_on_failure(tmp_path: Path) -> None:
-    """Verify no .tmp file is left behind after a failed migration."""
-    csv_path = tmp_path / "15_ticks.csv"
-    zst_path = tmp_path / "15_ticks.csv.zst"
-    # source does not exist → migration fails
-    ex._migrate_to_compressed(csv_path, zst_path)
-    tmp_path_glob = list(tmp_path.glob("*.tmp"))
-    assert tmp_path_glob == []
+    assert ex._load_daily_candles(path) is None
 
 
 # ---------------------------------------------------------------------------
