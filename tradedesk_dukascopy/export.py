@@ -35,7 +35,7 @@ import struct
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -384,32 +384,15 @@ def _probe(
         return None
 
 
-def _daily_tick_path(cache_dir: Path, symbol: str, day: date) -> Path:
-    """Return the path for a daily tick CSV cache file (Zstandard compressed)."""
+def _daily_candle_path(cache_dir: Path, symbol: str, day: date, side: str) -> Path:
+    """Return path for a daily 1-min candle cache file (Zstandard compressed)."""
     return (
-        cache_dir / symbol / f"{day.year}" / f"{day.month - 1:02d}" / f"{day.day:02d}_ticks.csv.zst"
+        cache_dir
+        / symbol
+        / f"{day.year}"
+        / f"{day.month - 1:02d}"
+        / f"{day.day:02d}_{side}.csv.zst"
     )
-
-
-def _migrate_to_compressed(csv_path: Path, zst_path: Path) -> bool:
-    """
-    Compress an existing uncompressed .csv to .csv.zst using Zstandard level 3.
-
-    Atomically replaces the .csv with .csv.zst. Returns True on success.
-    """
-    tmp = zst_path.with_suffix(zst_path.suffix + ".tmp")
-    try:
-        cctx = zstd.ZstdCompressor(level=3)
-        with open(csv_path, "rb") as f_in, open(tmp, "wb") as f_out:
-            cctx.copy_stream(f_in, f_out)
-        tmp.replace(zst_path)
-        csv_path.unlink()
-        return True
-    except Exception as e:
-        log.warning("Failed to migrate %s to compressed format: %s", csv_path, e)
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
-        return False
 
 
 def _cleanup_empty_day_dirs(cache_dir: Path, symbol: str) -> None:
@@ -447,45 +430,27 @@ def _candles_to_candles(df: pd.DataFrame, resample_rule: str) -> pd.DataFrame:
     return out.dropna(subset=["open"])
 
 
-def _write_daily_ticks(ticks: list[Tick], path: Path) -> None:
-    """Atomically write daily tick data as a Zstandard-compressed CSV (level 3)."""
+def _write_daily_candles(df: pd.DataFrame, path: Path) -> None:
+    """Atomically write a 1-min candle DataFrame as a Zstandard-compressed CSV (level 3)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    df = pd.DataFrame(
-        {
-            "ts": [t.ts.isoformat() for t in ticks],
-            "bid": [t.bid for t in ticks],
-            "ask": [t.ask for t in ticks],
-            "bid_vol": [t.bid_vol for t in ticks],
-            "ask_vol": [t.ask_vol for t in ticks],
-        }
-    )
+    out = df.copy()
+    out.index.name = "timestamp"
     cctx = zstd.ZstdCompressor(level=3)
-    compressed = cctx.compress(df.to_csv(index=False).encode("utf-8"))
+    compressed = cctx.compress(out.reset_index().to_csv(index=False).encode("utf-8"))
     tmp.write_bytes(compressed)
     tmp.replace(path)
 
 
-def _load_daily_ticks(path: Path) -> list[Tick] | None:
-    """Read a Zstandard-compressed daily tick CSV. Returns None on missing file or parse error."""
+def _load_daily_candles(path: Path) -> pd.DataFrame | None:
+    """Read a Zstandard-compressed 1-min candle CSV. Returns None on missing file or parse error."""
     try:
         dctx = zstd.ZstdDecompressor()
         with open(path, "rb") as f_in:
             with dctx.stream_reader(f_in) as reader:
                 df = pd.read_csv(io.TextIOWrapper(io.BufferedReader(reader), encoding="utf-8"))
-        timestamps = pd.to_datetime(df["ts"], format="ISO8601", utc=True)
-        return [
-            Tick(
-                ts=ts.to_pydatetime().replace(tzinfo=UTC),
-                bid=float(bid),
-                ask=float(ask),
-                bid_vol=float(bv),
-                ask_vol=float(av),
-            )
-            for ts, bid, ask, bv, av in zip(
-                timestamps, df["bid"], df["ask"], df["bid_vol"], df["ask_vol"], strict=True
-            )
-        ]
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df.set_index("timestamp")
     except Exception:
         return None
 
@@ -498,7 +463,7 @@ def export_range(
     out: Path,
     price_side: str = "bid",
     price_divisor: float = 1.0,
-    resample_rule: str,
+    resample_rule: str | None,
     cache_dir: Path | None,
     probe: bool = False,
     probe_ticks: int = 10,
@@ -515,13 +480,12 @@ def export_range(
 
     Caching strategy (when cache_dir is set):
       - .bi5 tick files are downloaded and cached as before.
-      - After all hours of a day decode successfully, a daily tick CSV file is
-        written (containing raw tick data: ts/bid/ask/bid_vol/ask_vol) and the
+      - After all hours of a day decode successfully, two daily 1-min candle
+        CSV files are written ({day}_bid.csv.zst, {day}_ask.csv.zst) and the
         .bi5 files for that day are deleted.
-      - On subsequent runs, days with a daily tick CSV present skip .bi5
-        download/decode entirely and load ticks from the CSV, converting to
-        candles on the fly.
-      - A day is only committed to a daily tick CSV when every hour has a
+      - On subsequent runs, days with both candle CSVs present skip .bi5
+        download/decode entirely and load candles directly from the CSVs.
+      - A day is only committed to candle CSVs when every hour has a
         definitive result (successfully decoded or legitimate empty-200). Hours
         with 404 or decode failures leave the day uncommitted so the next run
         can retry.
@@ -549,8 +513,9 @@ def export_range(
     all_1min_bid_frames: list[pd.DataFrame] = []
     all_1min_ask_frames: list[pd.DataFrame] = []
 
-    # Per-day tick lists — used for writing daily tick CSVs.
-    day_ticks: dict[date, list[Tick]] = {}
+    # Per-day 1-min candle frame lists — used for writing daily candle cache files.
+    day_bid_frames: dict[date, list[pd.DataFrame]] = {}
+    day_ask_frames: dict[date, list[pd.DataFrame]] = {}
 
     # Days where at least one hour had a non-definitive result (404 / decode failure).
     # These days are NOT written to daily CSVs so the next run can retry.
@@ -566,22 +531,18 @@ def export_range(
         _probe(symbol, hours_to_fetch[0:24], cache_dir, probe_ticks, price_divisor)
         return (None, None)
 
-    # Pre-check: identify days where a daily tick CSV already exists.
+    # Pre-check: identify days where daily 1-min candle CSVs already exist.
     # Those days skip .bi5 download and decode entirely.
-    # Migrate any existing uncompressed .csv files to .csv.zst and
-    # remove empty day directories left from previous bi5 cleanup runs.
+    # Remove empty day directories left from previous bi5 cleanup runs.
     days_fully_cached: set[date] = set()
     unique_days: set[date] = set()
     if cache_dir is not None:
         unique_days = {h.date() for h in hours_to_fetch}
         for day in unique_days:
-            zst_path = _daily_tick_path(cache_dir, symbol, day)
-            csv_path = zst_path.with_suffix("")  # strip .zst → .csv
-            if zst_path.exists():
+            bid_path = _daily_candle_path(cache_dir, symbol, day, "bid")
+            ask_path = _daily_candle_path(cache_dir, symbol, day, "ask")
+            if bid_path.exists() and ask_path.exists():
                 days_fully_cached.add(day)
-            elif csv_path.exists():
-                if _migrate_to_compressed(csv_path, zst_path):
-                    days_fully_cached.add(day)
         _cleanup_empty_day_dirs(cache_dir, symbol)
 
     # Early exit: if every day is cached there may be nothing to (re)generate.
@@ -700,11 +661,12 @@ def export_range(
 
     def _flush_day(day: date) -> None:
         """
-        Write daily tick CSV (compressed) and delete .bi5 files + day directory,
-        but only if the day completed without gaps (no 404s or decode failures).
+        Write daily 1-min candle CSVs (bid + ask, compressed) and delete .bi5 files + day
+        directory, but only if the day completed without gaps (no 404s or decode failures).
         Always advances the cache progress task.
         """
-        ticks_for_day = day_ticks.pop(day, [])
+        bid_frames = day_bid_frames.pop(day, [])
+        ask_frames = day_ask_frames.pop(day, [])
 
         def _advance_cache_progress() -> None:
             if progress is not None and cache_task_id is not None:
@@ -714,12 +676,15 @@ def export_range(
             _advance_cache_progress()
             return
 
-        try:
-            _write_daily_ticks(ticks_for_day, _daily_tick_path(cache_dir, symbol, day))
-        except Exception as e:
-            log.warning(f"{symbol}: failed to write daily tick CSV for {day}: {e}")
-            _advance_cache_progress()
-            return
+        _empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        for side, frames in (("bid", bid_frames), ("ask", ask_frames)):
+            df = pd.concat(frames).sort_index() if frames else _empty
+            try:
+                _write_daily_candles(df, _daily_candle_path(cache_dir, symbol, day, side))
+            except Exception as e:
+                log.warning(f"{symbol}: failed to write daily {side} candle CSV for {day}: {e}")
+                _advance_cache_progress()
+                return
 
         # Delete .bi5 files for this day and remove the now-empty day directory
         day_dir: Path | None = None
@@ -778,24 +743,20 @@ def export_range(
             current_day = current_hour.date()
             is_last_hour_of_day = current_hour == last_hour_of_day[current_day]
 
-            # --- Cached day: load daily tick CSV on the last hour of the day ---
+            # --- Cached day: load daily 1-min candle CSVs on the last hour of the day ---
             if comp is _DAY_CACHED:
                 hours_loaded_from_cache += 1
                 if is_last_hour_of_day and resample_rule is not None:
-                    cached_ticks = _load_daily_ticks(
-                        _daily_tick_path(cache_dir, symbol, current_day)  # type: ignore[arg-type]
+                    bid_candles = _load_daily_candles(
+                        _daily_candle_path(cache_dir, symbol, current_day, "bid")  # type: ignore[arg-type]
                     )
-                    if cached_ticks:
-                        one_min_bid = _ticks_to_candles(
-                            cached_ticks, resample_rule="1min", price_side="bid"
-                        )
-                        one_min_ask = _ticks_to_candles(
-                            cached_ticks, resample_rule="1min", price_side="ask"
-                        )
-                        if not one_min_bid.empty:
-                            all_1min_bid_frames.append(one_min_bid)
-                        if not one_min_ask.empty:
-                            all_1min_ask_frames.append(one_min_ask)
+                    ask_candles = _load_daily_candles(
+                        _daily_candle_path(cache_dir, symbol, current_day, "ask")  # type: ignore[arg-type]
+                    )
+                    if bid_candles is not None and not bid_candles.empty:
+                        all_1min_bid_frames.append(bid_candles)
+                    if ask_candles is not None and not ask_candles.empty:
+                        all_1min_ask_frames.append(ask_candles)
                 _advance_resample_progress()
                 continue
 
@@ -874,19 +835,21 @@ def export_range(
                 continue
 
             # --- Generate 1-minute candles for bid and ask ---
-            if resample_rule is not None:
+            if resample_rule is not None or cache_dir is not None:
                 one_min_bid = _ticks_to_candles(ticks, resample_rule="1min", price_side="bid")
                 one_min_ask = _ticks_to_candles(ticks, resample_rule="1min", price_side="ask")
-                if not one_min_bid.empty or not one_min_ask.empty:
-                    hours_resampled_nonempty += 1
-                if not one_min_bid.empty:
-                    all_1min_bid_frames.append(one_min_bid)
-                if not one_min_ask.empty:
-                    all_1min_ask_frames.append(one_min_ask)
-
-            # Store raw ticks for daily CSV writing (when caching)
-            if cache_dir is not None:
-                day_ticks.setdefault(current_day, []).extend(ticks)
+                if resample_rule is not None:
+                    if not one_min_bid.empty or not one_min_ask.empty:
+                        hours_resampled_nonempty += 1
+                    if not one_min_bid.empty:
+                        all_1min_bid_frames.append(one_min_bid)
+                    if not one_min_ask.empty:
+                        all_1min_ask_frames.append(one_min_ask)
+                if cache_dir is not None:
+                    if not one_min_bid.empty:
+                        day_bid_frames.setdefault(current_day, []).append(one_min_bid)
+                    if not one_min_ask.empty:
+                        day_ask_frames.setdefault(current_day, []).append(one_min_ask)
 
             _advance_resample_progress()
 

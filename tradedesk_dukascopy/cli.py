@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -159,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             cache_dir=None if args.no_cache else args.cache_dir,
             probe=True,
             probe_ticks=args.probe_ticks,
-            out=None,
+            out=Path(tempfile.gettempdir()),
         )
 
         return 0
@@ -167,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     # Build export tasks
     from tradedesk_dukascopy.parallel import ExportTask, run_parallel_exports
 
-    out = Path(args.out) if args.out is not None else None
+    out = Path(args.out) if args.out is not None else Path(tempfile.gettempdir())
     cache_dir = None if args.no_cache else args.cache_dir
 
     tasks = [

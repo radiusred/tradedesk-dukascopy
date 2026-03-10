@@ -1,137 +1,146 @@
-"""Tests for daily tick CSV caching helpers."""
+"""Tests for daily 1-min candle CSV caching helpers."""
 
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 import tradedesk_dukascopy.export as ex
 
 
-def _sample_ticks(day: date, count: int = 60) -> list[ex.Tick]:
-    """Build sample ticks spread across the first hour of `day`."""
-    base = datetime(day.year, day.month, day.day, 0, 0, tzinfo=UTC)
-    return [
-        ex.Tick(
-            ts=base + timedelta(seconds=i),
-            bid=1.10 + i * 0.0001,
-            ask=1.10 + i * 0.0001 + 0.0002,
-            bid_vol=100.0,
-            ask_vol=200.0,
-        )
-        for i in range(count)
-    ]
+def _sample_candles(day: date, count: int = 5) -> pd.DataFrame:
+    """Build sample 1-min OHLCV candles starting at midnight of `day`."""
+    base = pd.Timestamp(datetime(day.year, day.month, day.day, 0, 0, tzinfo=UTC))
+    idx = pd.date_range(base, periods=count, freq="1min")
+    return pd.DataFrame(
+        {
+            "open": [1.10 + i * 0.001 for i in range(count)],
+            "high": [1.11 + i * 0.001 for i in range(count)],
+            "low": [1.09 + i * 0.001 for i in range(count)],
+            "close": [1.105 + i * 0.001 for i in range(count)],
+            "volume": [100.0 + i for i in range(count)],
+        },
+        index=idx,
+    )
 
 
 # ---------------------------------------------------------------------------
-# _daily_tick_path
+# _daily_candle_path
 # ---------------------------------------------------------------------------
 
 
-def test_daily_tick_path_structure(tmp_path: Path) -> None:
+def test_daily_candle_path_structure_bid(tmp_path: Path) -> None:
     day = date(2025, 3, 15)
-    p = ex._daily_tick_path(tmp_path, "EURUSD", day)
+    p = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
     # Month is zero-based: March (3) → "02"
-    assert p == tmp_path / "EURUSD" / "2025" / "02" / "15_ticks.csv.zst"
+    assert p == tmp_path / "EURUSD" / "2025" / "02" / "15_bid.csv.zst"
 
 
-def test_daily_tick_path_no_price_side(tmp_path: Path) -> None:
-    """Tick path has no price side — a single file holds all sides."""
+def test_daily_candle_path_structure_ask(tmp_path: Path) -> None:
+    day = date(2025, 3, 15)
+    p = ex._daily_candle_path(tmp_path, "EURUSD", day, "ask")
+    assert p == tmp_path / "EURUSD" / "2025" / "02" / "15_ask.csv.zst"
+
+
+def test_daily_candle_path_first_day_of_year(tmp_path: Path) -> None:
     day = date(2025, 1, 1)
-    p = ex._daily_tick_path(tmp_path, "EURUSD", day)
-    assert p.name == "01_ticks.csv.zst"
+    p = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
+    assert p.name == "01_bid.csv.zst"
 
 
 # ---------------------------------------------------------------------------
-# _write_daily_ticks / _load_daily_ticks round-trip
+# _write_daily_candles / _load_daily_candles round-trip
 # ---------------------------------------------------------------------------
 
 
 def test_write_and_load_round_trip(tmp_path: Path) -> None:
     day = date(2025, 6, 1)
-    ticks = _sample_ticks(day, count=10)
-    path = ex._daily_tick_path(tmp_path, "EURUSD", day)
+    candles = _sample_candles(day, count=5)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
 
-    ex._write_daily_ticks(ticks, path)
+    ex._write_daily_candles(candles, path)
     assert path.exists()
 
-    loaded = ex._load_daily_ticks(path)
+    loaded = ex._load_daily_candles(path)
     assert loaded is not None
-    assert len(loaded) == len(ticks)
-    for orig, ld in zip(loaded, ticks, strict=True):
-        assert orig.ts == ld.ts
-        assert orig.bid == pytest.approx(ld.bid)
-        assert orig.ask == pytest.approx(ld.ask)
-        assert orig.bid_vol == pytest.approx(ld.bid_vol)
-        assert orig.ask_vol == pytest.approx(ld.ask_vol)
+    assert len(loaded) == len(candles)
+    for col in ("open", "high", "low", "close", "volume"):
+        for orig, got in zip(candles[col], loaded[col]):
+            assert orig == pytest.approx(got)
+
+
+def test_write_and_load_preserves_utc_index(tmp_path: Path) -> None:
+    day = date(2025, 6, 1)
+    candles = _sample_candles(day, count=3)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
+
+    ex._write_daily_candles(candles, path)
+    loaded = ex._load_daily_candles(path)
+    assert loaded is not None
+    assert loaded.index.tz is not None  # must have timezone
+    assert list(loaded.index) == list(candles.index)
 
 
 def test_write_creates_parent_dirs(tmp_path: Path) -> None:
     day = date(2025, 6, 1)
     nested = tmp_path / "deep" / "nested"
-    path = ex._daily_tick_path(nested, "GBPUSD", day)
-    ticks = _sample_ticks(day, count=5)
+    path = ex._daily_candle_path(nested, "GBPUSD", day, "ask")
+    candles = _sample_candles(day, count=2)
 
-    ex._write_daily_ticks(ticks, path)
+    ex._write_daily_candles(candles, path)
     assert path.exists()
 
 
 def test_write_is_atomic(tmp_path: Path) -> None:
     """No .tmp file should remain after a successful write."""
     day = date(2025, 6, 1)
-    path = ex._daily_tick_path(tmp_path, "EURUSD", day)
-    ex._write_daily_ticks(_sample_ticks(day), path)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
+    ex._write_daily_candles(_sample_candles(day), path)
 
     tmp_files = list(tmp_path.rglob("*.tmp"))
     assert tmp_files == []
 
 
+def test_write_empty_dataframe_is_loadable(tmp_path: Path) -> None:
+    """Empty candle files (market-closed days) must survive a round-trip."""
+    day = date(2025, 6, 7)
+    empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
+
+    ex._write_daily_candles(empty, path)
+    loaded = ex._load_daily_candles(path)
+    assert loaded is not None
+    assert loaded.empty
+
+
 def test_load_returns_none_for_missing_file(tmp_path: Path) -> None:
-    p = tmp_path / "nonexistent.csv"
-    assert ex._load_daily_ticks(p) is None
+    p = tmp_path / "nonexistent.csv.zst"
+    assert ex._load_daily_candles(p) is None
 
 
 def test_load_returns_none_for_corrupt_file(tmp_path: Path) -> None:
-    p = tmp_path / "bad.csv"
-    p.write_text("not,valid,csv\nbad data here")
-    assert ex._load_daily_ticks(p) is None
-
-
-def test_load_handles_mixed_fractional_timestamps(tmp_path: Path) -> None:
-    """Some ticks land on exact seconds (no fractional part), others have ms."""
-    day = date(2025, 6, 1)
-    base = datetime(2025, 6, 1, 0, 0, tzinfo=UTC)
-    ticks = [
-        ex.Tick(ts=base, bid=1.0, ask=1.1, bid_vol=10.0, ask_vol=20.0),  # no fractional
-        ex.Tick(
-            ts=base + timedelta(milliseconds=500), bid=1.0, ask=1.1, bid_vol=10.0, ask_vol=20.0
-        ),
-    ]
-    path = ex._daily_tick_path(tmp_path, "TEST", day)
-    ex._write_daily_ticks(ticks, path)
-    loaded = ex._load_daily_ticks(path)
-    assert loaded is not None
-    assert len(loaded) == 2
-    assert loaded[0].ts == ticks[0].ts
-    assert loaded[1].ts == ticks[1].ts
+    p = tmp_path / "bad.csv.zst"
+    p.write_bytes(b"this is not valid zstd data")
+    assert ex._load_daily_candles(p) is None
 
 
 # ---------------------------------------------------------------------------
-# tick CSV → candle aggregation round-trip
+# candle CSV round-trip through aggregation
 # ---------------------------------------------------------------------------
 
 
-def test_ticks_roundtrip_through_csv(tmp_path: Path) -> None:
-    """Write ticks to CSV, reload, convert to candles — values must be stable."""
+def test_candles_roundtrip_through_csv_and_aggregate(tmp_path: Path) -> None:
+    """Write 1-min candles, reload, aggregate to 5-min — values must be stable."""
     day = date(2025, 1, 5)
-    ticks = _sample_ticks(day, count=120)  # 2 minutes of second-resolution ticks
+    candles = _sample_candles(day, count=10)  # 10 one-minute candles
 
-    path = ex._daily_tick_path(tmp_path, "EURUSD", day)
-    ex._write_daily_ticks(ticks, path)
-    loaded = ex._load_daily_ticks(path)
+    path = ex._daily_candle_path(tmp_path, "EURUSD", day, "bid")
+    ex._write_daily_candles(candles, path)
+    loaded = ex._load_daily_candles(path)
 
     assert loaded is not None
-    candles = ex._ticks_to_candles(loaded, resample_rule="1min", price_side="bid")
-    assert len(candles) == 2  # 2 one-minute candles
-    assert candles.iloc[0]["open"] == pytest.approx(ticks[0].bid)
-    assert candles.iloc[0]["volume"] == pytest.approx(100.0 * 60)  # 60 ticks summed
+    aggregated = ex._candles_to_candles(loaded, "5min")
+    assert len(aggregated) == 2  # 10 min → 2 five-minute bars
+    assert aggregated.iloc[0]["open"] == pytest.approx(candles.iloc[0]["open"])
+    assert aggregated.iloc[0]["volume"] == pytest.approx(sum(candles["volume"][:5]))

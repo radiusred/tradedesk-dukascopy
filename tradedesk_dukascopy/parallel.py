@@ -32,7 +32,7 @@ class ExportTask:
     resample_rule: str | None
     price_divisor: float
     cache_dir: Path | None
-    out: Path | None
+    out: Path
 
 
 @dataclass
