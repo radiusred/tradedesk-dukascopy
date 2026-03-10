@@ -44,22 +44,3 @@ All 78 tests pass. Here's a summary of everything implemented:
 
 New test file: `tests/test_compression.py` — covers write/load round-trip, corrupt file handling, migration (success, failure, tmp cleanup), and empty dir cleanup.
 
-
-## Cost
-
-| Metric | Details |
-| :--- | :--- |
-| Total Cost | **$2.57** |
-| Total Duration (API) | **7m 13s** |
-| Total Code Changes | **275 lines added, 13 lines removed** |
-
-### Usage by Model 
-
-**claude-sonnet-4-6:**
-
-| Type | Tokens |
-| :--- | :--- |
-| Input | 3.0k |
-| Output | 27.9k |
-| Cache Read | 2.2m |
-| Cache Write | 121.9k |
