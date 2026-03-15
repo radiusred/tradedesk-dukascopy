@@ -46,11 +46,11 @@ from rich.progress import Progress
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy)"
 # Retry configuration
-RETRY_BASE_DELAY = 0.5  # seconds
-RETRY_MAX_DELAY = 4.0  # seconds
-RETRY_BACKOFF_FACTOR = 2.0
+RETRY_BASE_DELAY = 0.8  # seconds
+RETRY_MAX_DELAY = 6.0  # seconds
+RETRY_BACKOFF_FACTOR = 2.5
 # Download parallelisation
-DOWNLOAD_THREADS_PER_INSTRUMENT = 4
+DOWNLOAD_THREADS_PER_INSTRUMENT = 2
 
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": UA})

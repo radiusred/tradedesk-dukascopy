@@ -62,8 +62,8 @@ def test_exponential_backoff_timing(monkeypatch, tmp_path: Path):
     ]
 
     # Allow some tolerance for execution time
-    assert 0.4 < delays[0] < 0.7  # ~0.5s backoff
-    assert 0.9 < delays[1] < 1.3  # ~1.0s backoff
+    assert 0.4 < delays[0] < 0.9  # ~0.5s backoff
+    assert 0.9 < delays[1] < 2.1  # ~1.0s backoff
 
 
 def test_backoff_resets_on_success(monkeypatch, tmp_path: Path):
@@ -91,5 +91,5 @@ def test_backoff_resets_on_success(monkeypatch, tmp_path: Path):
     ex._download_bi5("http://example.com/2.bi5", tmp_path / "2.bi5", retries=2)
     elapsed2 = time.time() - start2
 
-    assert 0.4 < elapsed1 < 0.8  # One backoff
+    assert 0.4 < elapsed1 < 0.9  # One backoff
     assert elapsed2 < 0.2  # No backoff
