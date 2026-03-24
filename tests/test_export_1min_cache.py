@@ -1,6 +1,6 @@
 """Tests for daily 1-min candle CSV caching helpers."""
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -66,7 +66,7 @@ def test_write_and_load_round_trip(tmp_path: Path) -> None:
     assert loaded is not None
     assert len(loaded) == len(candles)
     for col in ("open", "high", "low", "close", "volume"):
-        for orig, got in zip(candles[col], loaded[col]):
+        for orig, got in zip(candles[col], loaded[col], strict=True):
             assert orig == pytest.approx(got)
 
 

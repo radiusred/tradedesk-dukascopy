@@ -782,6 +782,21 @@ def export_range(
             if detected_format is None:
                 detected_format = _probe_price_format(comp)  # type: ignore[arg-type]
                 log.info(f"{symbol}: detected tick price format = {detected_format}")
+                if detected_format == "int" and price_divisor == 1.0:
+                    # Warn when int32 format is used with the default divisor.
+                    # Dukascopy encodes FX tick prices as integers scaled by a
+                    # point-factor (e.g. 10 000 for 4-decimal pairs).  If you
+                    # pass --price-divisor 1.0 (the default) the cached candles
+                    # will store raw integer values instead of real prices.
+                    # Use tradedesk-dc-normalize to fix an affected cache.
+                    log.warning(
+                        "%s: int32 tick format detected with --price-divisor 1.0 (default). "
+                        "Decoded prices will be raw integer values, not actual market prices. "
+                        "Pass the correct --price-divisor for this instrument "
+                        "(e.g. 10000 for 4-decimal FX, 100 for JPY crosses) "
+                        "or run 'tradedesk-dc-normalize' on an existing cache.",
+                        symbol,
+                    )
 
             # --- Decode ticks ---
             try:
