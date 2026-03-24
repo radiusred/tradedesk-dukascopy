@@ -223,7 +223,7 @@ def test_write_and_load_daily_candles_round_trip(tmp_path: Path) -> None:
     assert len(loaded) == len(original)
 
     for col in ("open", "high", "low", "close", "volume"):
-        for orig, got in zip(original[col], loaded[col]):
+        for orig, got in zip(original[col], loaded[col], strict=True):
             assert abs(orig - got) < 1e-6
 
 

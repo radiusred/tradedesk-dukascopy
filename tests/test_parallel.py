@@ -9,7 +9,6 @@ import tradedesk_dukascopy.export as ex
 import tradedesk_dukascopy.parallel as par
 from tradedesk_dukascopy.parallel import ExportResult, ExportTask, _export_worker
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

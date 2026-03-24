@@ -12,10 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 import tradedesk_dukascopy.export as ex
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -349,7 +347,6 @@ def test_no_resample_returns_none_tuple_and_writes_no_csv(monkeypatch, tmp_path)
 
 def _make_and_write_candle_cache(cache_dir: Path, symbol: str, ts: datetime, day: "date") -> None:  # noqa: F821
     """Write minimal bid+ask candle cache files for a day."""
-    from datetime import date
 
     candles = _make_candles(ts)
     bid_path = ex._daily_candle_path(cache_dir, symbol, day, "bid")
