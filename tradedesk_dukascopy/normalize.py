@@ -54,7 +54,12 @@ _JPY_CROSSES = frozenset(
         "USDJPY",
     }
 )
-_PRECIOUS_METALS = frozenset({"XAUUSD", "XAGUSD"})
+# Gold and silver need separate ranges: gold has never been below $1 000 in the
+# modern era, so a lower bound of 1 000 prevents ÷1000 from being chosen when
+# the correct divisor is ÷100 (which would happen if gold > $5 000 and the
+# stored raw value is in the 500 000–999 999 range).
+_GOLD = frozenset({"XAUUSD"})
+_SILVER = frozenset({"XAGUSD"})
 _IDX_SUBSTRINGS = ("IDX",)
 
 
@@ -67,8 +72,10 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
     upper = symbol.upper()
     if upper in _JPY_CROSSES:
         return (50.0, 500.0)
-    if upper in _PRECIOUS_METALS:
-        return (500.0, 50_000.0)
+    if upper in _GOLD:
+        return (1_000.0, 50_000.0)
+    if upper in _SILVER:
+        return (10.0, 500.0)
     if any(s in upper for s in _IDX_SUBSTRINGS):
         return (100.0, 500_000.0)
     # Standard 4-decimal FX pairs
