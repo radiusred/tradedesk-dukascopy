@@ -1,29 +1,30 @@
 """
 Normalize Dukascopy cache daily candle files with incorrect price scaling.
 
-Detects days where cached prices are scaled incorrectly (100× or 10000× too
-large) based on instrument type, and divides by the correct factor in-place.
+Detects days where cached prices are scaled incorrectly based on instrument
+type, and divides by the correct factor in-place.
 
 Background
 ----------
-Dukascopy changed their bi5 tick encoding format around 2026-03-11.  Before
-that date the format was int32 with a per-instrument point-factor divisor:
-
-* 4-decimal FX (EURUSD, AUDNZD, GBPUSD …): point factor 10 000
-* 2-decimal FX / JPY crosses (USDJPY, AUDJPY …): point factor 100
-* 2-decimal commodities (XAUUSD …): point factor 100
-
-After 2026-03-11 the format changed:
-
-* 4-decimal FX: int32 with point factor 100 (until ~2026-03-20)
-* 2-decimal FX / JPY / commodities: float32 native (correct as-is)
-
-After ~2026-03-20 the format changed again to float32 native for all pairs.
-
 When ``tradedesk-dc-export`` is run with the default ``--price-divisor 1.0``
-the daily candle CSVs end up storing the raw integer values, not actual
-prices.  This module detects and corrects those cached files without
-re-downloading data from Dukascopy.
+the daily candle CSVs store raw bi5 integer tick values rather than real
+prices.  The correct divisor varies by instrument type:
+
+* 4-decimal FX (EURUSD, AUDNZD, GBPUSD …): ÷100 000
+* 2-decimal FX / JPY crosses (USDJPY, AUDJPY …): ÷1 000
+* 2-decimal commodities (XAUUSD, XAGUSD …): ÷100
+
+A second class of miscalibration arises when ``infer_price_divisor`` selects
+the wrong divisor because the instrument's price has moved outside the
+expected range.  A known instance: XAUUSD files downloaded between 2026-01-25
+and 2026-03-10 were stored at ÷1 000 instead of ÷100 because gold broke
+$5 000 for the first time and the plausible-range guard was set too low
+(``(500, 50_000)``).  The guard was corrected to ``(1_000, 50_000)`` in the
+same release that introduced this module.
+
+This module detects both classes of miscalibration by checking whether each
+day's median price falls within the expected instrument range, and corrects
+affected files in-place without re-downloading data from Dukascopy.
 """
 
 from __future__ import annotations
