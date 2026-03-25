@@ -135,6 +135,18 @@ def test_infer_divisor_jpy_already_correct() -> None:
     assert infer_price_divisor(155.0, lo, hi) == 1.0
 
 
+def test_infer_divisor_gold_100x_too_large() -> None:
+    lo, hi = _expected_price_range("XAUUSD")
+    # Gold at ~$5 363 → stored as 536 300 (×100); ÷1000 must NOT be chosen
+    # (536.3 is outside the gold range) — ÷100 must win.
+    assert infer_price_divisor(536_300.0, lo, hi) == 100.0
+
+
+def test_infer_divisor_gold_already_correct() -> None:
+    lo, hi = _expected_price_range("XAUUSD")
+    assert infer_price_divisor(2_641.0, lo, hi) == 1.0
+
+
 def test_infer_divisor_returns_1_when_no_candidate_works() -> None:
     # Price 0.00001 — nothing plausible
     lo, hi = _expected_price_range("EURUSD")
