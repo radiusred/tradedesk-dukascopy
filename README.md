@@ -30,7 +30,9 @@ Export 5-minute candles for EURUSD:
 tradedesk-dc-export --symbol EURUSD \
   --from 2025-01-01 --to 2025-01-31 \
   --out data \
-  --price-divisor 1000
+  --cache-dir /paperclip/tradedesk/marketdata \
+  --price-divisor 1000 \
+  --workers 1
 ```
 
 This produces:
@@ -113,6 +115,17 @@ When run, the tool will fetch new or missing raw data files from Dukascopy for t
 Dukascopy downloads are notoriously slow and unreliable due to rate limiting and limited resources available for their service. This tool has multiple strategies to address and work around those limitations, including retaining the raw files until a full daily file of CSV data can be written. Re-running the same `tradedesk-dc-export` is both safe and efficient - it will only attempt to fill in gaps and will finish very quickly where downloads or conversions are already cached.
 
 For this to work well though, you should treat the cache directory as a permanent, not a transient store of local market data that can be added to over time. Best practice is to **always** specify a `--cache-dir` that points to your common market data trove wherever you use the tool from.
+
+### Concurrency and Dukascopy reliability
+
+Each symbol export uses up to four downloader threads internally. `--workers`
+controls how many symbols are exported concurrently, so the total request
+concurrency can grow quickly.
+
+Dukascopy becomes unreliable when too many requests are in flight. If you want
+to stay near the safest limit of four concurrent download threads, keep
+`--workers 1`. Re-running the same command is idempotent and is the intended way
+to fill cache gaps caused by failed hours.
 
 ### Resampled CSV using `--out`
 
