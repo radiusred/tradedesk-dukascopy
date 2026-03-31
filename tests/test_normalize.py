@@ -102,6 +102,43 @@ def test_expected_price_range_fx4() -> None:
     assert hi < 20
 
 
+def test_expected_price_range_crude_oil() -> None:
+    lo, hi = _expected_price_range("BRENTCMDUSD")
+    assert lo <= 20.0
+    assert hi >= 150.0
+
+
+def test_expected_price_range_high_rate_fx() -> None:
+    lo, hi = _expected_price_range("EURSEK")
+    # EURSEK trades around 11 — must be above the standard FX upper of 15
+    assert lo >= 5.0
+    assert hi >= 15.0
+
+
+def test_infer_divisor_crude_oil_already_correct() -> None:
+    lo, hi = _expected_price_range("BRENTCMDUSD")
+    # Brent at ~$76 should be left unchanged
+    assert infer_price_divisor(76.0, lo, hi) == 1.0
+
+
+def test_infer_divisor_crude_oil_100x_too_large() -> None:
+    lo, hi = _expected_price_range("BRENTCMDUSD")
+    # Raw Dukascopy int ~7600 (= $76 × 100) → should divide by 100
+    assert infer_price_divisor(7_600.0, lo, hi) == 100.0
+
+
+def test_infer_divisor_high_rate_fx_already_correct() -> None:
+    lo, hi = _expected_price_range("EURSEK")
+    # EURSEK at 11.03 should be left unchanged
+    assert infer_price_divisor(11.03, lo, hi) == 1.0
+
+
+def test_infer_divisor_high_rate_fx_10000x_too_large() -> None:
+    lo, hi = _expected_price_range("EURSEK")
+    # Raw Dukascopy int 110314 (= 11.03 × 10000) → should divide by 10000
+    assert infer_price_divisor(110_314.0, lo, hi) == 10_000.0
+
+
 # ---------------------------------------------------------------------------
 # infer_price_divisor
 # ---------------------------------------------------------------------------

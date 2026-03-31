@@ -62,6 +62,12 @@ _JPY_CROSSES = frozenset(
 _GOLD = frozenset({"XAUUSD"})
 _SILVER = frozenset({"XAGUSD"})
 _IDX_SUBSTRINGS = ("IDX",)
+# Crude oil and energy commodities quoted in USD per barrel (~20–200 range).
+_CRUDE_OIL = frozenset({"BRENTCMDUSD", "WTIOILUSD", "USOILUSD"})
+# Pairs quoted above 5.0 in their natural rate (e.g. EURSEK ~11, EURNOK ~12).
+# Without this, infer_price_divisor selects ÷100000 instead of ÷10000 because
+# both results fall in the default FX range (0.3, 15.0).
+_HIGH_RATE_FX = frozenset({"EURSEK", "EURNOK", "USDNOK", "GBPSEK", "GBPNOK"})
 
 
 def _expected_price_range(symbol: str) -> tuple[float, float]:
@@ -77,6 +83,12 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
         return (1_000.0, 50_000.0)
     if upper in _SILVER:
         return (10.0, 500.0)
+    if upper in _CRUDE_OIL:
+        # Crude oil quoted in USD per barrel; range covers post-2000 extremes.
+        return (10.0, 250.0)
+    if upper in _HIGH_RATE_FX:
+        # Pairs with a natural rate above 5 — prevent over-division by 100000.
+        return (5.0, 20.0)
     if any(s in upper for s in _IDX_SUBSTRINGS):
         return (100.0, 500_000.0)
     # Standard 4-decimal FX pairs
