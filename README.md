@@ -11,12 +11,18 @@ This tool downloads raw tick data from Dukascopy, converts it into clean,
 deterministic CSV candle files, and writes a metadata sidecar describing exactly
 how the data was produced.
 
-It is designed to be run once per dataset, not repeatedly during backtests.
+## Status
 
+- Active maintenance with CI checks and releases.
+- Last updated: 2026-04-01
 
 ---
 
 ## Quick start
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development guidelines and contribution process.
 
 Install:
 
