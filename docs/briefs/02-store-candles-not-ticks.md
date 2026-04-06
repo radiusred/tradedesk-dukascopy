@@ -58,3 +58,12 @@ The goal of this session is to replace the tick storage files with OHLCV candle 
 ### Result
 
 78 tests pass, 82% coverage.
+
+---
+
+## License
+
+Licensed under the Apache License, Version 2.0.
+See: https://www.apache.org/licenses/LICENSE-2.0
+
+Copyright 2026 [Radius Red Ltd.](https://github.com/radiusred) | [Contact](mailto:opensource@radiusred.uk)

@@ -12,7 +12,7 @@ The goal of this session is to retain the beneficial cache format improvement bu
 
 ## Approach
 
- - `zstandard` needs adding as a dependency using `uv add`
+- Add `zstandard` as a dependency (e.g., via `poetry add zstandard` or `pip install zstandard`).
  - Compress files as they are written, store only the compressed version on disk.
  - Optimise the current process by removing the parent directory of the `.bi5` files in addition to the files. Currently empty directories are left on disk
  - The goal should be achieved regardless of the current contents of the cache. For example;
@@ -44,3 +44,11 @@ All 78 tests pass. Here's a summary of everything implemented:
 
 New test file: `tests/test_compression.py` — covers write/load round-trip, corrupt file handling, migration (success, failure, tmp cleanup), and empty dir cleanup.
 
+---
+
+## License
+
+Licensed under the Apache License, Version 2.0.
+See: https://www.apache.org/licenses/LICENSE-2.0
+
+Copyright 2026 [Radius Red Ltd.](https://github.com/radiusred) | [Contact](mailto:opensource@radiusred.uk)
