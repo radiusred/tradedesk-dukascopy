@@ -39,7 +39,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import requests
+import requests  # type: ignore[import-untyped]
 import zstandard as zstd
 from rich.progress import Progress
 

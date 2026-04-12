@@ -8,7 +8,7 @@ These tests exercise:
   - Early exit (None, None) when all days are cached and no resample is requested
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -345,7 +345,7 @@ def test_no_resample_returns_none_tuple_and_writes_no_csv(monkeypatch, tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def _make_and_write_candle_cache(cache_dir: Path, symbol: str, ts: datetime, day: "date") -> None:  # noqa: F821
+def _make_and_write_candle_cache(cache_dir: Path, symbol: str, ts: datetime, day: date) -> None:
     """Write minimal bid+ask candle cache files for a day."""
 
     candles = _make_candles(ts)
