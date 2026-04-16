@@ -27,8 +27,9 @@ pip install tradedesk-dukascopy
 Export 5-minute candles for EURUSD:
 
 ```bash
-tradedesk-dc-export --symbol EURUSD \
+tradedesk-dc-export --symbols EURUSD \
   --from 2025-01-01 --to 2025-01-31 \
+  --resample 5min \
   --out data \
   --cache-dir /paperclip/tradedesk/marketdata \
   --price-divisor 1000 \
@@ -39,11 +40,14 @@ This produces:
 
 ```text
 data/
-  EURUSD_5MIN.csv
-  EURUSD_5MIN.csv.meta.json
+  EURUSD_5MIN_BID.csv
+  EURUSD_5MIN_BID.csv.meta.json
+  EURUSD_5MIN_ASK.csv
+  EURUSD_5MIN_ASK.csv.meta.json
 ```
 
-You can now point your backtest engine at the CSV file directly.
+You can now point your backtest engine at the bid or ask CSV directly, depending
+on which price side you want to replay.
 
 ---
 
@@ -65,7 +69,7 @@ Examples:
 If unsure, use probe mode:
 
 ```bash
-tradedesk-dc-export --symbol GBPSEK \
+tradedesk-dc-export --symbols GBPSEK \
   --from 2025-07-01 --to 2025-07-01 \
   --probe
 ```
@@ -118,18 +122,19 @@ For this to work well though, you should treat the cache directory as a permanen
 
 ### Concurrency and Dukascopy reliability
 
-Each symbol export uses up to four downloader threads internally. `--workers`
+Each symbol export uses up to two downloader threads internally. `--workers`
 controls how many symbols are exported concurrently, so the total request
 concurrency can grow quickly.
 
 Dukascopy becomes unreliable when too many requests are in flight. If you want
-to stay near the safest limit of four concurrent download threads, keep
+to stay near the safest limit of two concurrent download threads, keep
 `--workers 1`. Re-running the same command is idempotent and is the intended way
 to fill cache gaps caused by failed hours.
 
 ### Resampled CSV using `--out`
 
-If you `--resample` files to an `--out` location, the resulting output CSV file contains OHLCV candles with timestamps in UTC (ISO-8601):
+If you resample to an `--out` location, the tool writes separate bid and ask
+OHLCV CSV files with timestamps in UTC (ISO-8601):
 
 ```text
 timestamp,open,high,low,close,volume
@@ -142,7 +147,7 @@ timestamp,open,high,low,close,volume
 
 #### Metadata sidecar (`.meta.json`)
 
-Every CSV is accompanied by a metadata file describing how it was generated:
+Every output CSV is accompanied by a metadata file describing how it was generated:
 
 ```json
 {
@@ -164,7 +169,9 @@ Every CSV is accompanied by a metadata file describing how it was generated:
 
 This ensures datasets are **self-describing and reproducible**, even months later.
 
-`--out` and `--resample` are optional but must always be used together if specified. If you choose to run the tool with neither, this will create the source tick files only in the `--cache-dir` but generate no output resampled candle files. You may wish to do this if you want to point your backtest directly at the cache, you're using dynamic resampling from the tick data as part of your backtest, or you are just building up some local market data for use later.
+`--resample` requires `--out`. If you run the tool without `--resample`, it will
+populate the `--cache-dir` with the cached source data and daily candles but it
+will not emit the final range-level output CSVs in `--out`.
 
 ---
 
@@ -181,3 +188,7 @@ Licensed under the Apache License, Version 2.0.
 See: https://www.apache.org/licenses/LICENSE-2.0
 
 Copyright 2026 [Radius Red Ltd.](https://github.com/radiusred)
+
+## Contributing
+
+See CONTRIBUTING.md for guidelines on contributing to tradedesk-dukascopy.
