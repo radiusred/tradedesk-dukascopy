@@ -40,10 +40,10 @@ This produces:
 
 ```text
 data/
-  EURUSD_5MIN_BID.csv
-  EURUSD_5MIN_BID.csv.meta.json
-  EURUSD_5MIN_ASK.csv
-  EURUSD_5MIN_ASK.csv.meta.json
+  EURUSD_5MIN_bid.csv
+  EURUSD_5MIN_bid.csv.meta.json
+  EURUSD_5MIN_ask.csv
+  EURUSD_5MIN_ask.csv.meta.json
 ```
 
 You can now point your backtest engine at the bid or ask CSV directly, depending
@@ -134,11 +134,11 @@ to fill cache gaps caused by failed hours.
 ### Resampled CSV using `--out`
 
 If you resample to an `--out` location, the tool writes separate bid and ask
-OHLCV CSV files with timestamps in UTC (ISO-8601):
+OHLCV CSV files with UTC timestamps that include an explicit `+00:00` offset:
 
 ```text
 timestamp,open,high,low,close,volume
-2025-01-01T00:00:00+00:00,1.10342,1.10361,1.10311,1.10355,1234.0
+2025-01-01 00:00:00+00:00,1.10342,1.10361,1.10311,1.10355,1234.0
 ```
 
 - Timestamps are always **UTC**
