@@ -7,24 +7,27 @@ Export Dukascopy historical data by downloading .bi5 *tick* files and resampling
 
 - Decompresses LZMA .bi5
 - Decodes ticks (bid/ask + volumes)
-- Resamples to candles (default 5-minute OHLCV; uses BID unless specified)
-- Writes a single CSV per instrument for the requested date range.
+- Resamples ticks into bid-side and ask-side OHLCV candles
+- Writes one CSV per price side for the requested date range when
+  ``resample_rule`` is provided
 
 Output format:
 timestamp,open,high,low,close,volume
-(UTC, ISO8601)
+(UTC, rendered as ``YYYY-MM-DD HH:MM:SS+00:00`` in the exported CSV)
 
 - Prices are floats, volumes are floats.
 - Month in URL is zero-based. See Dukascopy datafeed conventions.
 
 Examples:
-  python scripts/export_dukascopy_candles.py \
-    --symbol EURUSD --from 2025-08-01 --to 2025-12-31 \
-    --out out/EURUSD_5MINUTE.csv
+  tradedesk-dc-export --symbols EURUSD \
+    --from 2025-08-01 --to 2025-12-31 \
+    --resample 5min \
+    --out out
 
-  python scripts/export_dukascopy_candles.py \
-    --symbol USA500IDXUSD --from 2025-11-01 --to 2025-12-31 \
-    --out out/US500_5MINUTE.csv
+  tradedesk-dc-export --symbols USA500IDXUSD \
+    --from 2025-11-01 --to 2025-12-31 \
+    --resample 5min \
+    --out out
 """
 
 import io
