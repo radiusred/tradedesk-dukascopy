@@ -57,7 +57,7 @@ All contributions must pass with zero type errors.
 - Exported datasets are canonical and self-describing via `<output>.meta.json`.
 - `--price-divisor` is applied once at export time; downstream code must not
   rescale.
-- Keep Dukascopy concurrency conservative. One symbol export already uses four
+- Keep Dukascopy concurrency conservative. One symbol export already uses two
   downloader threads internally, so `--workers 1` is the safest default when
   reproducing failures or filling gaps.
 
