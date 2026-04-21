@@ -180,6 +180,23 @@ will not emit the final range-level output CSVs in `--out`.
 - Python 3.11+
 - Internet access to Dukascopy datafeed
 
+## Credentials and Release Automation
+
+Normal exporter usage, local development, and CI do not require repository
+secrets or broker credentials.
+
+Maintainers running `.github/workflows/prepare-release.yml` need these
+repository secrets configured:
+
+- `RELEASE_APP_ID`
+- `RELEASE_APP_PRIVATE_KEY`
+
+The release workflow uses those secrets to mint a GitHub App token for
+checkout, version bumping, pushing the release commit, and creating the GitHub
+release. `.github/workflows/publish.yml` uses PyPI trusted publishing via
+GitHub OIDC (`id-token: write`), so no PyPI API token secret is expected in
+this repository.
+
 ---
 
 ## License

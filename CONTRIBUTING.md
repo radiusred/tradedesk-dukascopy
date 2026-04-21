@@ -58,8 +58,9 @@ All contributions must pass with zero type errors.
 - `--price-divisor` is applied once at export time; downstream code must not
   rescale.
 - Keep Dukascopy concurrency conservative. One symbol export already uses two
-  downloader threads internally, so `--workers 1` is the safest default when
-  reproducing failures or filling gaps.
+  downloader threads internally, so `--workers 1` caps total download
+  concurrency at two requests and is the safest default when reproducing
+  failures or filling gaps.
 
 ## Testing
 
@@ -72,6 +73,23 @@ pytest --cov=tradedesk_dukascopy --cov-fail-under=75
 - All new and existing tests must pass following any code change.
 - Code coverage must remain at or above 75%.
 - Include tests for new functionality or bug fixes.
+
+## Credentials and Release Automation
+
+Normal exporter runs, local development, and CI do not require repository
+secrets or broker credentials.
+
+Maintainers triggering `.github/workflows/prepare-release.yml` must configure
+these repository secrets:
+
+- `RELEASE_APP_ID`
+- `RELEASE_APP_PRIVATE_KEY`
+
+The shared reusable release workflow uses those values to mint a GitHub App
+token for checkout, version bumping, pushing the release commit, and creating
+the GitHub release. `.github/workflows/publish.yml` uses PyPI trusted
+publishing via GitHub OIDC (`id-token: write`), so no PyPI API token secret is
+expected in this repository.
 
 ## Pull Requests
 
