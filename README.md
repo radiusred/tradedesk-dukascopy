@@ -32,7 +32,7 @@ tradedesk-dc-export --symbols EURUSD \
   --resample 5min \
   --out data \
   --cache-dir /paperclip/tradedesk/marketdata \
-  --price-divisor 1000 \
+  --price-divisor 100000 \
   --workers 1
 ```
 
@@ -62,8 +62,8 @@ Examples:
 
 | Instrument | Typical divisor |
 |----------|-----------------|
-| EURUSD   | `1000` |
-| USDJPY  | `100000` |
+| EURUSD   | `100000` |
+| USDJPY  | `1000` |
 | Indices | `1` or `10` |
 
 If unsure, use probe mode:
@@ -98,6 +98,34 @@ using --price-divisor 1.0:
 2025-07-01T00:00:10.556000+00:00 bid 1297877.0 ask 1298724.0 bid_vol 0.9200000166893005
 2025-07-01T00:00:12.562000+00:00 bid 1297839.0 ask 1298684.0 bid_vol 1.149999976158142
 ```
+
+---
+
+## Repairing a mis-scaled cache
+
+If you accidentally exported with the default `--price-divisor 1.0` against an
+instrument that uses integer tick encoding, use the cache normalizer instead of
+rewriting files by hand.
+
+Preview the changes first:
+
+```bash
+tradedesk-dc-normalize \
+  --cache-dir /paperclip/tradedesk/marketdata \
+  --symbols EURUSD \
+  --dry-run
+```
+
+Then apply them:
+
+```bash
+tradedesk-dc-normalize \
+  --cache-dir /paperclip/tradedesk/marketdata \
+  --symbols EURUSD
+```
+
+The normalizer scans cached daily candle files, detects price-scale errors from
+the symbol's expected range, and rewrites the affected bid/ask files in place.
 
 ---
 

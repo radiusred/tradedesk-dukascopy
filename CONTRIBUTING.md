@@ -57,6 +57,9 @@ All contributions must pass with zero type errors.
 - Exported datasets are canonical and self-describing via `<output>.meta.json`.
 - `--price-divisor` is applied once at export time; downstream code must not
   rescale.
+- If a historical cache was written with the wrong divisor, prefer
+  `tradedesk-dc-normalize --dry-run` followed by `tradedesk-dc-normalize`
+  instead of ad hoc repair scripts.
 - Keep Dukascopy concurrency conservative. One symbol export already uses two
   downloader threads internally, so `--workers 1` is the safest default when
   reproducing failures or filling gaps.

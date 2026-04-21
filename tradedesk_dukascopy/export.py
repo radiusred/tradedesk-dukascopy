@@ -796,7 +796,7 @@ def export_range(
                         "%s: int32 tick format detected with --price-divisor 1.0 (default). "
                         "Decoded prices will be raw integer values, not actual market prices. "
                         "Pass the correct --price-divisor for this instrument "
-                        "(e.g. 10000 for 4-decimal FX, 100 for JPY crosses) "
+                        "(e.g. 100000 for 4-decimal FX, 1000 for JPY crosses) "
                         "or run 'tradedesk-dc-normalize' on an existing cache.",
                         symbol,
                     )
