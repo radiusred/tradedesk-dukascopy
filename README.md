@@ -99,6 +99,26 @@ using --price-divisor 1.0:
 2025-07-01T00:00:12.562000+00:00 bid 1297839.0 ask 1298684.0 bid_vol 1.149999976158142
 ```
 
+### Repairing an existing cache
+
+If you already populated `--cache-dir` with the wrong price scale, the package
+ships a repair command:
+
+```bash
+tradedesk-dc-normalize --cache-dir /paperclip/tradedesk/marketdata --dry-run
+tradedesk-dc-normalize --cache-dir /paperclip/tradedesk/marketdata --symbols EURUSD USDJPY
+```
+
+`tradedesk-dc-normalize` rewrites cached daily candle files in place when it
+detects prices that are clearly outside the expected range for a symbol. This
+covers both caches written with the default `--price-divisor 1.0` for int32
+tick feeds and older cache files affected by a bad inferred divisor.
+
+The normalizer only updates the cached daily candle files under `--cache-dir`.
+If you already wrote range-level CSVs with `--out`, rerun your export command
+after normalizing so those output files are regenerated from the corrected
+cache.
+
 ---
 
 ## Intended workflow
