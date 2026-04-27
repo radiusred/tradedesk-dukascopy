@@ -1,11 +1,13 @@
-# tradedesk-dukascopy
 
 ![CI Build](https://github.com/radiusred/tradedesk-dukascopy/actions/workflows/ci.yml/badge.svg)
 [![PyPI Version](https://img.shields.io/pypi/v/tradedesk-dukascopy?label=PyPI)](https://pypi.python.org/pypi/tradedesk-dukascopy)
 
+![banner](https://i.ibb.co/Kc5C88gp/tradedesk-banner.webp)
+
+# tradedesk-dukascopy
+
 Dukascopy tick downloader and candle exporter for use in backtesting your trading strategies.
 
-![loop](https://i.ibb.co/BSz1JSH/tradedesk-dukascopy.gif)
 
 This tool downloads raw tick data from Dukascopy, converts it into clean,
 deterministic CSV candle files, and writes a metadata sidecar describing exactly
@@ -13,6 +15,7 @@ how the data was produced.
 
 It is designed to be run once per dataset, not repeatedly during backtests.
 
+![loop](https://i.ibb.co/BSz1JSH/tradedesk-dukascopy.gif)
 
 ---
 
