@@ -92,8 +92,37 @@ def test_expected_price_range_gold() -> None:
 
 
 def test_expected_price_range_index() -> None:
+    # USA500 is now a known index with a tight band (1_000, 10_000) so that
+    # infer_price_divisor unambiguously picks ÷1000 for raw ~3M values.
     lo, hi = _expected_price_range("USA500IDXUSD")
-    assert hi > 10_000
+    assert lo == 1_000.0
+    assert hi == 10_000.0
+
+
+def test_expected_price_range_unknown_index_fallback() -> None:
+    # Unknown indices fall through to the wide generic IDX band.
+    lo, hi = _expected_price_range("UNKNOWNIDXUSD")
+    assert lo == 100.0
+    assert hi == 500_000.0
+
+
+def test_expected_price_range_known_indices() -> None:
+    # Sanity-check each known index's range covers its post-2000 trading band.
+    for symbol, expected_mid in {
+        "DEUIDXEUR": 18_000.0,  # DAX 2025
+        "GBRIDXGBP": 8_000.0,  # FTSE 2025
+        "JPNIDXJPY": 38_000.0,  # Nikkei 2025
+        "AUSIDXAUD": 8_000.0,  # ASX 2025
+    }.items():
+        lo, hi = _expected_price_range(symbol)
+        assert lo <= expected_mid <= hi, f"{symbol} band {lo}-{hi} excludes {expected_mid}"
+
+
+def test_infer_divisor_usa500_picks_1000_not_10000() -> None:
+    # Regression for RAD-728: USA500 raw close ~3 000 000 must pick ÷1000
+    # (→ 3000, real S&P level), not ÷10000 (→ 300, well below S&P).
+    lo, hi = _expected_price_range("USA500IDXUSD")
+    assert infer_price_divisor(3_000_000.0, lo, hi) == 1_000.0
 
 
 def test_expected_price_range_fx4() -> None:
