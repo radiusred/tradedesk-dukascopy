@@ -62,6 +62,18 @@ _JPY_CROSSES = frozenset(
 _GOLD = frozenset({"XAUUSD"})
 _SILVER = frozenset({"XAGUSD"})
 _IDX_SUBSTRINGS = ("IDX",)
+# Per-index ranges. The default IDX fallback (100, 500_000) is wide enough to
+# admit two divisors for the same raw value — e.g. USA500 raw ~3 000 000 fits
+# both ÷1000 (3 000) and ÷10000 (300), and infer_price_divisor would pick the
+# larger one (÷10000) since it tries divisors largest-first. Tight per-index
+# bands eliminate that ambiguity.
+_INDEX_RANGES: dict[str, tuple[float, float]] = {
+    "USA500IDXUSD": (1_000.0, 10_000.0),  # S&P 500: ~2400-7000 in our era
+    "DEUIDXEUR": (3_000.0, 30_000.0),  # DAX: ~5000-25000
+    "GBRIDXGBP": (2_000.0, 12_000.0),  # FTSE 100: ~3000-9000
+    "JPNIDXJPY": (5_000.0, 60_000.0),  # Nikkei 225: ~7000-50000
+    "AUSIDXAUD": (3_000.0, 12_000.0),  # ASX 200: ~4000-9000
+}
 # Crude oil and energy commodities quoted in USD per barrel (~20–200 range).
 _CRUDE_OIL = frozenset({"BRENTCMDUSD", "WTIOILUSD", "USOILUSD"})
 # Pairs quoted above 5.0 in their natural rate (e.g. EURSEK ~11, EURNOK ~12).
@@ -89,7 +101,10 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
     if upper in _HIGH_RATE_FX:
         # Pairs with a natural rate above 5 — prevent over-division by 100000.
         return (5.0, 20.0)
+    if upper in _INDEX_RANGES:
+        return _INDEX_RANGES[upper]
     if any(s in upper for s in _IDX_SUBSTRINGS):
+        # Generic fallback for unknown indices; deliberately wide.
         return (100.0, 500_000.0)
     # Standard 4-decimal FX pairs
     return (0.3, 15.0)
