@@ -121,6 +121,52 @@ If you already wrote range-level CSVs with `--out`, rerun your export command
 after normalizing so those output files are regenerated from the corrected
 cache.
 
+## Data-quality audit scripts
+
+The repository also ships two maintainer-oriented audit scripts under
+`scripts/` for checking whether an existing local candle cache still looks
+healthy after exporter changes or upstream Dukascopy drift.
+
+`scripts/dukascopy_audit.py` is a read-only local audit. It inspects the
+cached 1-minute bid/ask candles for each instrument and emits JSON covering:
+
+- session-gap counts and longest intraday gap
+- DST-transition day bar-count anomalies
+- spread sanity percentiles
+- stale-price runs
+
+Example:
+
+```bash
+python scripts/dukascopy_audit.py \
+  --cache /paperclip/tradedesk/marketdata \
+  --instruments EURUSD GBPUSD USDJPY XAUUSD \
+  --year-start 2024 \
+  --year-end 2025 \
+  --out /tmp/dukascopy_audit.json
+```
+
+`scripts/dukascopy_cross_provider.py` is a cross-provider check. It compares
+the local Dukascopy daily close series against ECB/Frankfurter reference rates
+for FX and Yahoo Finance reference closes for indices, metals, and commodity
+proxies.
+
+Example:
+
+```bash
+python scripts/dukascopy_cross_provider.py \
+  --cache /paperclip/tradedesk/marketdata \
+  --instruments EURUSD GBPUSD USDJPY XAUUSD USA500IDXUSD \
+  --start 2024-01-01 \
+  --end 2025-12-31 \
+  --out /tmp/dukascopy_cross_provider.json
+```
+
+Both scripts are intended for maintainers validating cached data quality, not
+for the normal export path. `dukascopy_cross_provider.py` performs live HTTP
+requests to external reference feeds, so it requires internet access in
+addition to a populated local cache.
+
 ---
 
 ## Intended workflow

@@ -61,6 +61,10 @@ All contributions must pass with zero type errors.
   downloader threads internally, so `--workers 1` caps total download
   concurrency at two requests and is the safest default when reproducing
   failures or filling gaps.
+- When exporter, cache-normalization, or probe logic changes, rerun the
+  maintainer audit scripts in `scripts/` against a populated cache:
+  `dukascopy_audit.py` for local gap/DST/spread/stale checks and
+  `dukascopy_cross_provider.py` for cross-provider close-price correlation.
 
 ## Testing
 
