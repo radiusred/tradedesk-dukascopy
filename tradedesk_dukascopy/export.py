@@ -46,6 +46,8 @@ import requests  # type: ignore[import-untyped]
 import zstandard as zstd
 from rich.progress import Progress
 
+from .scale_sentry import check_scale_consistency
+
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 UA = "tradedesk/1.0 bi5-export (https://github.com/radiusred/tradedesk-dukascopy)"
 # Retry configuration
@@ -502,6 +504,7 @@ def export_range(
     hours_decode_failed = 0
     hours_resampled_nonempty = 0
     hours_loaded_from_cache = 0
+    days_rejected_scale_sentry = 0
 
     detected_format: str | None = None
     symbol = _symbol_normalise(symbol)
@@ -668,6 +671,7 @@ def export_range(
         directory, but only if the day completed without gaps (no 404s or decode failures).
         Always advances the cache progress task.
         """
+        nonlocal days_rejected_scale_sentry
         bid_frames = day_bid_frames.pop(day, [])
         ask_frames = day_ask_frames.pop(day, [])
 
@@ -680,8 +684,26 @@ def export_range(
             return
 
         _empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        for side, frames in (("bid", bid_frames), ("ask", ask_frames)):
-            df = pd.concat(frames).sort_index() if frames else _empty
+        bid_df = pd.concat(bid_frames).sort_index() if bid_frames else _empty
+        ask_df = pd.concat(ask_frames).sort_index() if ask_frames else _empty
+
+        # Scale-discontinuity sentry (RAD-1920): refuse to write a daily candle
+        # CSV whose median close diverges from the existing neighbour cache.
+        # That class of mismatch is silent in backtests and produces order-of-
+        # magnitude wrong PnL across the boundary.  Leave the bi5 files in
+        # place so a subsequent retry with the correct --price-divisor can
+        # write the day cleanly.
+        if not bid_df.empty:
+            new_median = float(bid_df["close"].median())
+            ok, reason = check_scale_consistency(cache_dir, symbol, day, new_median)
+            if not ok:
+                days_rejected_scale_sentry += 1
+                log.error(reason)
+                day_has_gaps.add(day)
+                _advance_cache_progress()
+                return
+
+        for side, df in (("bid", bid_df), ("ask", ask_df)):
             try:
                 _write_daily_candles(df, _daily_candle_path(cache_dir, symbol, day, side))
             except Exception as e:
@@ -904,7 +926,8 @@ def export_range(
         f"missing_200={hours_empty_200}, downloaded={hours_downloaded}, "
         f"decode_failed={hours_decode_failed}, "
         f"resampled_nonempty={hours_resampled_nonempty}, "
-        f"loaded_from_cache={hours_loaded_from_cache}"
+        f"loaded_from_cache={hours_loaded_from_cache}, "
+        f"days_rejected_scale_sentry={days_rejected_scale_sentry}"
     )
 
     if resample_rule is None:
