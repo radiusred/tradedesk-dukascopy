@@ -121,6 +121,36 @@ If you already wrote range-level CSVs with `--out`, rerun your export command
 after normalizing so those output files are regenerated from the corrected
 cache.
 
+### Rescaling a cache that drifted off its own dominant scale
+
+`tradedesk-dc-normalize` brings each day's prices into a hardcoded
+*natural-units* band (e.g. USDJPY 50–500). That is the wrong target when the
+downstream consumer expects prices at the symbol's existing scaled-cache
+convention (for instance the bulk of an FX/JPY cache exported with
+`--price-divisor 10`, leaving USDJPY at ~15 700 rather than ~157.0).
+
+Use `tradedesk-dc-rescale` for that case (RAD-1920). It finds the symbol's
+dominant cache scale (median of per-day medians) and snaps every off-scale day
+back onto it by a power-of-ten factor:
+
+```bash
+tradedesk-dc-rescale --cache-dir /paperclip/tradedesk/marketdata --dry-run
+tradedesk-dc-rescale --cache-dir /paperclip/tradedesk/marketdata --symbols USDJPY
+```
+
+Days whose median cannot be reconciled to a power of ten of the dominant scale
+are reported as `unfixable`; delete and re-export those with the matching
+`--price-divisor`.
+
+### Write-time scale-discontinuity sentry
+
+`tradedesk-dc-export` automatically refuses to commit a freshly-resampled
+daily CSV whose median close diverges by more than 3× from the medians of
+its neighbours already on disk. The bi5 hour files for that day are kept so
+the day can be retried with the matching `--price-divisor`. See
+`tradedesk_dukascopy.scale_sentry` and RAD-1920 for the failure mode this
+catches.
+
 ## Data-quality audit scripts
 
 The repository also ships two maintainer-oriented audit scripts under

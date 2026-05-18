@@ -46,6 +46,7 @@ parquet = ["pyarrow>=16.1"]
 [project.scripts]
 tradedesk-dc-export = "tradedesk_dukascopy.cli:main"
 tradedesk-dc-normalize = "tradedesk_dukascopy.normalize_cli:main"
+tradedesk-dc-rescale = "tradedesk_dukascopy.rescale_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/radiusred"
