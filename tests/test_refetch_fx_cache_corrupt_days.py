@@ -276,6 +276,43 @@ def test_remediate_symbol_processes_corrupt_dates(tmp_path, monkeypatch):
     assert fetched == [date(2024, 1, 15), date(2024, 1, 16)]
 
 
+def test_remediate_symbol_deletes_all_corrupt_days_before_any_refetch(tmp_path, monkeypatch):
+    """RAD-2146 hotfix: pass 1 must wipe every corrupt day before pass 2 starts,
+    so the RAD-1920 write-time scale sentry has no mis-scaled neighbours to
+    compare a freshly-fetched (correct-scale) day against. Without this, 100%-
+    systemic corruption triggers the sentry on every refetch and rejects the
+    fix.
+    """
+    mod = _load_script()
+    cfg = mod.FxScaleConfig("EURUSD", 100_000.0, 0.30, 2.00)
+    corrupt = [date(2024, 1, 15), date(2024, 1, 16), date(2024, 1, 17)]
+    for d in corrupt:
+        _write_day_csv(_candle_path(tmp_path, "EURUSD", d, "bid"), 10950.0)
+        _write_day_csv(_candle_path(tmp_path, "EURUSD", d, "ask"), 10950.0)
+
+    # Record the cache state seen at the start of each export_range call.
+    snapshots: list[list[date]] = []
+
+    def fake_export_range(**kwargs):
+        snapshots.append(sorted(
+            mod._parse_day(p)
+            for p in mod._iter_day_files(tmp_path / "EURUSD", "bid")
+        ))
+        d = kwargs["start_utc"].date()
+        for side in ("bid", "ask"):
+            _write_day_csv(_candle_path(tmp_path, "EURUSD", d, side), 1.09)
+
+    monkeypatch.setattr(mod, "export_range", fake_export_range)
+    ok, failures = mod.remediate_symbol(cfg, tmp_path, logging.getLogger("test"))
+
+    assert ok == 3 and failures == []
+    # First refetch must see an empty cache (all 3 corrupt days deleted up-front).
+    assert snapshots[0] == []
+    # Subsequent refetches see only the already-corrected neighbour days.
+    assert snapshots[1] == [date(2024, 1, 15)]
+    assert snapshots[2] == [date(2024, 1, 15), date(2024, 1, 16)]
+
+
 def test_remediate_symbol_records_failures(tmp_path, monkeypatch):
     mod = _load_script()
     cfg = mod.FxScaleConfig("EURUSD", 100_000.0, 0.30, 2.00)

@@ -221,7 +221,24 @@ def _refetch_day(cache_dir: Path, cfg: FxScaleConfig, d: date) -> bool:
 def remediate_symbol(
     cfg: FxScaleConfig, cache_dir: Path, log: logging.Logger
 ) -> tuple[int, list[date]]:
-    """Audit + re-fetch one symbol. Returns (ok_count, failures)."""
+    """Audit + re-fetch one symbol. Returns (ok_count, failures).
+
+    The remediation runs in two passes per symbol:
+
+    Pass 1 — delete every corrupt day-file *before* any re-fetch. This is
+    required because the RAD-1920 write-time scale-discontinuity sentry
+    compares each freshly-fetched day's median against the median of its
+    ±7-day neighbours. With 100% systemic corruption (RAD-2146), the
+    neighbours of a target day are themselves still corrupt, so a single
+    delete-and-refetch loop would have the sentry reject every correctly-
+    fetched day. Wiping all corrupt neighbours first means the sentry sees
+    fewer than ``min_history=2`` neighbours for the first refetched day
+    (cold-start exemption), then sees only freshly-and-correctly fetched
+    neighbours from refetch #2 onwards.
+
+    Pass 2 — re-fetch each previously-corrupt day in date order with the
+    correct ``price_divisor``.
+    """
     corrupt = find_corrupt_dates(cfg, cache_dir)
     if not corrupt:
         log.info("%s: no corrupt dates — skipping", cfg.symbol)
@@ -232,15 +249,28 @@ def remediate_symbol(
         cfg.symbol, len(corrupt), cfg.envelope_min, cfg.envelope_max, cfg.price_divisor,
     )
 
+    # Pass 1: delete all corrupt days so the scale sentry sees no
+    # mis-scaled neighbours during the subsequent refetch pass.
+    total_removed = 0
+    for d in corrupt:
+        total_removed += _delete_day(cache_dir, cfg.symbol, d)
+    log.info(
+        "%s: pass 1 complete — deleted %d cache paths across %d days",
+        cfg.symbol, total_removed, len(corrupt),
+    )
+
+    # Pass 2: re-fetch each corrupt day in chronological order. Earlier
+    # refetches become correct-scale neighbours for later refetches, so
+    # the sentry continues to guard against new drift introduced during
+    # remediation without rejecting the fix itself.
     ok = 0
     failures: list[date] = []
     for i, d in enumerate(corrupt, 1):
-        n_removed = _delete_day(cache_dir, cfg.symbol, d)
         if _refetch_day(cache_dir, cfg, d):
             ok += 1
             if i % 50 == 0 or i == len(corrupt):
-                log.info("%s [%d/%d] %s ok (removed %d, %d failures)",
-                         cfg.symbol, i, len(corrupt), d.isoformat(), n_removed, len(failures))
+                log.info("%s [%d/%d] %s ok (%d failures)",
+                         cfg.symbol, i, len(corrupt), d.isoformat(), len(failures))
         else:
             log.error("%s [%d/%d] %s — REFETCH FAILED", cfg.symbol, i, len(corrupt), d.isoformat())
             failures.append(d)
