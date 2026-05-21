@@ -111,7 +111,7 @@ def test_expected_price_range_known_indices() -> None:
     for symbol, expected_mid in {
         "DEUIDXEUR": 18_000.0,  # DAX 2025
         "GBRIDXGBP": 8_000.0,  # FTSE 2025
-        "JPNIDXJPY": 38_000.0,  # Nikkei 2025
+        "JPNIDXJPY": 63_000.0,  # Nikkei 2026-04 (broke 60k)
         "AUSIDXAUD": 8_000.0,  # ASX 2025
     }.items():
         lo, hi = _expected_price_range(symbol)
@@ -123,6 +123,26 @@ def test_infer_divisor_usa500_picks_1000_not_10000() -> None:
     # (→ 3000, real S&P level), not ÷10000 (→ 300, well below S&P).
     lo, hi = _expected_price_range("USA500IDXUSD")
     assert infer_price_divisor(3_000_000.0, lo, hi) == 1_000.0
+
+
+def test_infer_divisor_nikkei_picks_1000_not_10000() -> None:
+    # Regression for RAD-2122: with Nikkei trading >60k in Apr-2026, raw 60M
+    # cache values must pick ÷1000 (→ 60 000, real Nikkei) not ÷10000
+    # (→ 6 000, well below Nikkei). The pre-2122 band (5_000, 60_000) allowed
+    # both divisors to land inside it and `infer_price_divisor` chose the
+    # larger one. The widened band must exclude the ÷10000 result.
+    lo, hi = _expected_price_range("JPNIDXJPY")
+    assert infer_price_divisor(60_000_000.0, lo, hi) == 1_000.0
+    # The early-cycle corruption (~22M, Nikkei 2018) must also pick ÷1000.
+    assert infer_price_divisor(22_000_000.0, lo, hi) == 1_000.0
+
+
+def test_infer_divisor_nikkei_above_60k_left_unchanged() -> None:
+    # 2026-04-13 cache day printed median 63 129 (real Nikkei). The pre-2122
+    # band capped at 60 000 so `infer_price_divisor` would falsely flag this
+    # as ÷10 too large and corrupt the file. The widened band must leave it.
+    lo, hi = _expected_price_range("JPNIDXJPY")
+    assert infer_price_divisor(63_129.0, lo, hi) == 1.0
 
 
 def test_expected_price_range_fx4() -> None:
