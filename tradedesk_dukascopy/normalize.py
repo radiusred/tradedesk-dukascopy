@@ -71,7 +71,7 @@ _INDEX_RANGES: dict[str, tuple[float, float]] = {
     "USA500IDXUSD": (1_000.0, 10_000.0),  # S&P 500: ~2400-7000 in our era
     "DEUIDXEUR": (3_000.0, 30_000.0),  # DAX: ~5000-25000
     "GBRIDXGBP": (2_000.0, 12_000.0),  # FTSE 100: ~3000-9000
-    "JPNIDXJPY": (5_000.0, 60_000.0),  # Nikkei 225: ~7000-50000
+    "JPNIDXJPY": (10_000.0, 100_000.0),  # Nikkei 225: broke 60k in Apr-2026; widened to avoid the XAUUSD-style band-too-low miscalibration (RAD-2122)
     "AUSIDXAUD": (3_000.0, 12_000.0),  # ASX 200: ~4000-9000
 }
 # Crude oil and energy commodities quoted in USD per barrel (~20–200 range).
