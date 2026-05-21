@@ -23,7 +23,7 @@ def _load_script(tmp_cache: Path):
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.CACHE_DIR = tmp_cache
+    setattr(mod, "CACHE_DIR", tmp_cache)  # noqa: B010 — mod is ModuleType, mypy rejects direct attr assign
     return mod
 
 
