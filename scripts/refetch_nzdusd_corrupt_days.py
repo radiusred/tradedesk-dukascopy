@@ -17,8 +17,10 @@ For each date:
 3. Write-time ``check_scale_consistency`` (RAD-1920) verifies the fresh
    median against neighbour days; a divergence here would re-raise the bug.
 
-The script is idempotent: clean days are skipped because their daily candle
-files are not deleted.
+The script unconditionally deletes and re-fetches every date in
+``CORRUPT_DATES``; it does not inspect a day's existing candles to decide
+whether to skip it. Re-runs are safe because ``_delete_day`` no-ops on
+already-removed files and ``export_range`` overwrites the same cache paths.
 """
 from __future__ import annotations
 
