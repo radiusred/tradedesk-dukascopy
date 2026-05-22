@@ -140,7 +140,9 @@ tradedesk-dc-rescale --cache-dir /paperclip/tradedesk/marketdata --symbols USDJP
 
 Days whose median cannot be reconciled to a power of ten of the dominant scale
 are reported as `unfixable`; delete and re-export those with the matching
-`--price-divisor`.
+`--price-divisor`. `scripts/refetch_nzdusd_corrupt_days.py` (RAD-2132) is a
+worked example of that delete-and-re-fetch pattern for a known list of dates
+on a single symbol.
 
 ### Write-time scale-discontinuity sentry
 
@@ -153,7 +155,7 @@ catches.
 
 ## Data-quality audit scripts
 
-The repository also ships two maintainer-oriented audit scripts under
+The repository also ships three maintainer-oriented audit scripts under
 `scripts/` for checking whether an existing local candle cache still looks
 healthy after exporter changes or upstream Dukascopy drift.
 
@@ -192,7 +194,23 @@ python scripts/dukascopy_cross_provider.py \
   --out /tmp/dukascopy_cross_provider.json
 ```
 
-Both scripts are intended for maintainers validating cached data quality, not
+`scripts/audit_fx_scale.py` is a focused FX scale-corruption audit. For each
+``DD_{bid,ask}.csv.zst`` under ``<cache_dir>/<SYMBOL>``, it flags day files
+whose median close falls outside an explicit FX-rate envelope (e.g.
+`[0.30, 2.00]` for NZDUSD-style 4-decimal FX), so caches that were exported
+with the wrong `--price-divisor` show up immediately. It reports per-year
+and day-of-week histograms, or with `--print-dates` emits one ISO date per
+line for shell pipelines (see RAD-2132 for the original NZDUSD remediation
+that motivated it).
+
+Example:
+
+```bash
+python scripts/audit_fx_scale.py NZDUSD --min 0.30 --max 2.00
+python scripts/audit_fx_scale.py NZDUSD --print-dates
+```
+
+These scripts are intended for maintainers validating cached data quality, not
 for the normal export path. `dukascopy_cross_provider.py` performs live HTTP
 requests to external reference feeds, so it requires internet access in
 addition to a populated local cache.
