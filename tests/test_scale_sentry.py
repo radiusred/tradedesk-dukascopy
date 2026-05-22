@@ -1,4 +1,4 @@
-"""Tests for tradedesk_dukascopy.scale_sentry (RAD-1920)."""
+"""Tests for tradedesk_dukascopy.scale_sentry."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def test_consistent_scale_passes(tmp_path: Path) -> None:
 
 
 def test_10x_divergence_rejected(tmp_path: Path) -> None:
-    """RAD-1920 fingerprint: new day at 10× the neighbours → reject."""
+    """New day at 10× the neighbours → reject."""
     for d in [date(2026, 5, 1), date(2026, 5, 2), date(2026, 5, 4)]:
         _write_day(tmp_path, "USDJPY", d, 15_700.0)
     ok, reason = check_scale_consistency(tmp_path, "USDJPY", date(2026, 5, 5), 157_200.0)

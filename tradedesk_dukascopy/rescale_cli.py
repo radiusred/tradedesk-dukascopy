@@ -1,9 +1,8 @@
-"""CLI entry-point for cache scale rescaling (RAD-1920).
+"""CLI entry-point for cache scale rescaling.
 
 Usage::
 
-    tradedesk-dc-rescale --cache-dir /paperclip/tradedesk/marketdata \
-        --symbols USDJPY [--dry-run]
+    tradedesk-dc-rescale --cache-dir ./cache --symbols USDJPY [--dry-run]
 
 Brings every per-day median onto the symbol's dominant scale by a power-of-ten
 factor.  Days that cannot be reconciled to a power of ten are logged as
@@ -33,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         "--cache-dir",
         type=Path,
         required=True,
-        help="Root cache directory (e.g. /paperclip/tradedesk/marketdata)",
+        help="Root cache directory (e.g. ./cache)",
     )
     parser.add_argument(
         "--symbols",

@@ -7,16 +7,16 @@ References:
 
 Methodology:
 1. For each instrument, fetch daily reference close prices over [start, end].
-2. Load our local Dukascopy 1-min mid-price series (normalised), resample to daily close
+2. Load the local Dukascopy 1-min mid-price series (normalised), resample to daily close
    sampled at 21:00 UTC (London close) — the closest universal anchor.
 3. Compute Pearson correlation, mean abs error in pips (FX) or %, RMSE, max divergence,
    and bias.
 4. Output a JSON report per instrument.
 
 Usage:
-    python scripts/dukascopy_cross_provider.py \
-        --instruments EURUSD GBPUSD USDJPY EURGBP XAUUSD USA500IDXUSD \
-        --start 2024-01-01 --end 2025-12-31 \
+    python scripts/dukascopy_cross_provider.py --cache ./cache \\
+        --instruments EURUSD GBPUSD USDJPY \\
+        --start 2024-01-01 --end 2025-12-31 \\
         --out /tmp/cross_provider.json
 """
 
@@ -256,7 +256,7 @@ def compare(dc: pd.Series, ref: pd.Series, pip: float) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cache", default="/paperclip/tradedesk/marketdata")
+    ap.add_argument("--cache", required=True)
     ap.add_argument("--instruments", nargs="+", required=True)
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Internal Dukascopy data audit — gap, DST, spread, stale-price checks.
+"""Dukascopy data audit — gap, DST, spread, stale-price checks.
 
 Reads the locally cached 1-min bid/ask candles produced by the existing pipeline
 (`<cache>/<SYMBOL>/<YYYY>/<MM_zerobased>/<DD>_{bid,ask}.csv.zst`) and emits a
 JSON report summarising data-quality findings per instrument.
 
 Usage:
-    python scripts/dukascopy_audit.py --cache /paperclip/tradedesk/marketdata \
-        --instruments EURUSD GBPUSD USDJPY EURGBP AUDJPY XAUUSD XAGUSD \
-        --year-start 2024 --year-end 2025 \
+    python scripts/dukascopy_audit.py --cache ./cache \\
+        --instruments EURUSD GBPUSD USDJPY \\
+        --year-start 2024 --year-end 2025 \\
         --out /tmp/audit_report.json
 """
 
@@ -398,7 +398,7 @@ def audit_instrument(cache: Path, symbol: str, year_start: int, year_end: int) -
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cache", default="/paperclip/tradedesk/marketdata")
+    ap.add_argument("--cache", required=True)
     ap.add_argument("--instruments", nargs="+", required=True)
     ap.add_argument("--year-start", type=int, required=True)
     ap.add_argument("--year-end", type=int, required=True)

@@ -687,7 +687,7 @@ def export_range(
         bid_df = pd.concat(bid_frames).sort_index() if bid_frames else _empty
         ask_df = pd.concat(ask_frames).sort_index() if ask_frames else _empty
 
-        # Scale-discontinuity sentry (RAD-1920): refuse to write a daily candle
+        # Scale-discontinuity sentry: refuse to write a daily candle
         # CSV whose median close diverges from the existing neighbour cache.
         # That class of mismatch is silent in backtests and produces order-of-
         # magnitude wrong PnL across the boundary.  Leave the bi5 files in

@@ -1,4 +1,4 @@
-"""Tests for tradedesk_dukascopy.rescale (RAD-1920)."""
+"""Tests for tradedesk_dukascopy.rescale."""
 
 from __future__ import annotations
 
