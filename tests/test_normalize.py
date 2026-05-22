@@ -119,18 +119,18 @@ def test_expected_price_range_known_indices() -> None:
 
 
 def test_infer_divisor_usa500_picks_1000_not_10000() -> None:
-    # Regression for RAD-728: USA500 raw close ~3 000 000 must pick ÷1000
-    # (→ 3000, real S&P level), not ÷10000 (→ 300, well below S&P).
+    # USA500 raw close ~3 000 000 must pick ÷1000 (→ 3000, real S&P level),
+    # not ÷10000 (→ 300, well below S&P).
     lo, hi = _expected_price_range("USA500IDXUSD")
     assert infer_price_divisor(3_000_000.0, lo, hi) == 1_000.0
 
 
 def test_infer_divisor_nikkei_picks_1000_not_10000() -> None:
-    # Regression for RAD-2122: with Nikkei trading >60k in Apr-2026, raw 60M
-    # cache values must pick ÷1000 (→ 60 000, real Nikkei) not ÷10000
-    # (→ 6 000, well below Nikkei). The pre-2122 band (5_000, 60_000) allowed
-    # both divisors to land inside it and `infer_price_divisor` chose the
-    # larger one. The widened band must exclude the ÷10000 result.
+    # With Nikkei trading >60k in Apr-2026, raw 60M cache values must pick
+    # ÷1000 (→ 60 000, real Nikkei) not ÷10000 (→ 6 000, well below Nikkei).
+    # A narrower band (5_000, 60_000) would allow both divisors to land
+    # inside it and `infer_price_divisor` would pick the larger one; the
+    # widened band must exclude the ÷10000 result.
     lo, hi = _expected_price_range("JPNIDXJPY")
     assert infer_price_divisor(60_000_000.0, lo, hi) == 1_000.0
     # The early-cycle corruption (~22M, Nikkei 2018) must also pick ÷1000.

@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
-"""Audit a Dukascopy FX cache for scale-corrupt day files (e.g. raw int32 stored
-without dividing by 100 000).
+"""Audit a Dukascopy FX cache for scale-corrupt day files (e.g. raw int32
+stored without dividing by 100 000).
 
 For each ``DD_{bid,ask}.csv.zst`` under ``<cache_dir>/<SYMBOL>``, the script
 checks whether the median close is inside the expected FX rate envelope.
-A file is flagged ``hi`` when the median close is above ``--max``, ``lo`` when
-below ``--min``. Empty / unreadable files are reported as ``err``.
+A file is flagged ``hi`` when the median close is above ``--max``, ``lo``
+when below ``--min``. Empty / unreadable files are reported as ``err``.
 
 Usage::
 
-    python scripts/audit_fx_scale.py NZDUSD --min 0.30 --max 2.00
-    python scripts/audit_fx_scale.py NZDUSD --print-dates
-
-Background — RAD-2132: NZDUSD cache had 45 day-files at ~57 000-72 000
-(true spot ~0.55-0.75), i.e. 100 000× too large. The same heuristic is used
-to confirm fixes in [0.30, 2.00] for NZDUSD-style 4-decimal FX.
+    python scripts/audit_fx_scale.py NZDUSD --cache-dir ./cache --min 0.30 --max 2.00
+    python scripts/audit_fx_scale.py NZDUSD --cache-dir ./cache --print-dates
 """
 from __future__ import annotations
 
@@ -26,8 +22,6 @@ from pathlib import Path
 
 import pandas as pd
 import zstandard as zstd
-
-DEFAULT_CACHE = Path("/paperclip/tradedesk/marketdata")
 
 
 def _read_zst_close(path: Path) -> float | None:
@@ -71,8 +65,8 @@ def main() -> int:
     ap.add_argument(
         "--cache-dir",
         type=Path,
-        default=DEFAULT_CACHE,
-        help=f"Cache root (default: {DEFAULT_CACHE}).",
+        required=True,
+        help="Cache root containing the symbol directory.",
     )
     ap.add_argument("--min", type=float, default=0.30, help="Lower envelope (default: 0.30).")
     ap.add_argument("--max", type=float, default=2.00, help="Upper envelope (default: 2.00).")

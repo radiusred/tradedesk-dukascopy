@@ -5,7 +5,7 @@ every tick it decodes.  If the operator re-runs the exporter for a later date
 range with a *different* divisor, the resulting daily CSVs in
 ``cache_dir / SYMBOL / YYYY / MM / DD_{bid,ask}.csv.zst`` end up at a different
 scale to the bulk of the cache.  Downstream backtests that assume one scale
-silently produce wrong PnL across the boundary (RAD-1920 / RAD-679 family).
+silently produce wrong PnL across the boundary.
 
 The sentry below compares the median close of a freshly-resampled day to the
 medians of the closest existing canonical days in the cache (up to
@@ -148,8 +148,7 @@ def check_scale_consistency(
             f"diverges {ratio:.1f}× from neighbour baseline {baseline:.4f} "
             f"(samples={history_sorted}). Likely a --price-divisor "
             f"mismatch vs the existing cache; daily CSV not written. "
-            f"Investigate and re-run with the matching divisor "
-            f"(see RAD-1920)."
+            f"Investigate and re-run with the matching divisor."
         )
         return False, reason
     return True, None

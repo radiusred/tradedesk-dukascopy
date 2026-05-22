@@ -33,7 +33,7 @@ tradedesk-dc-export --symbols EURUSD \
   --from 2025-01-01 --to 2025-01-31 \
   --resample 5min \
   --out data \
-  --cache-dir /paperclip/tradedesk/marketdata \
+  --cache-dir ./cache \
   --price-divisor 1000 \
   --workers 1
 ```
@@ -107,8 +107,8 @@ If you already populated `--cache-dir` with the wrong price scale, the package
 ships a repair command:
 
 ```bash
-tradedesk-dc-normalize --cache-dir /paperclip/tradedesk/marketdata --dry-run
-tradedesk-dc-normalize --cache-dir /paperclip/tradedesk/marketdata --symbols EURUSD USDJPY
+tradedesk-dc-normalize --cache-dir ./cache --dry-run
+tradedesk-dc-normalize --cache-dir ./cache --symbols EURUSD USDJPY
 ```
 
 `tradedesk-dc-normalize` rewrites cached daily candle files in place when it
@@ -129,20 +129,18 @@ downstream consumer expects prices at the symbol's existing scaled-cache
 convention (for instance the bulk of an FX/JPY cache exported with
 `--price-divisor 10`, leaving USDJPY at ~15 700 rather than ~157.0).
 
-Use `tradedesk-dc-rescale` for that case (RAD-1920). It finds the symbol's
-dominant cache scale (median of per-day medians) and snaps every off-scale day
-back onto it by a power-of-ten factor:
+Use `tradedesk-dc-rescale` for that case. It finds the symbol's dominant
+cache scale (median of per-day medians) and snaps every off-scale day back
+onto it by a power-of-ten factor:
 
 ```bash
-tradedesk-dc-rescale --cache-dir /paperclip/tradedesk/marketdata --dry-run
-tradedesk-dc-rescale --cache-dir /paperclip/tradedesk/marketdata --symbols USDJPY
+tradedesk-dc-rescale --cache-dir ./cache --dry-run
+tradedesk-dc-rescale --cache-dir ./cache --symbols USDJPY
 ```
 
-Days whose median cannot be reconciled to a power of ten of the dominant scale
-are reported as `unfixable`; delete and re-export those with the matching
-`--price-divisor`. `scripts/refetch_nzdusd_corrupt_days.py` (RAD-2132) is a
-worked example of that delete-and-re-fetch pattern for a known list of dates
-on a single symbol.
+Days whose median cannot be reconciled to a power of ten of the dominant
+scale are reported as `unfixable`; delete and re-export those with the
+matching `--price-divisor`.
 
 ### Write-time scale-discontinuity sentry
 
@@ -150,8 +148,9 @@ on a single symbol.
 daily CSV whose median close diverges by more than 3× from the medians of
 its neighbours already on disk. The bi5 hour files for that day are kept so
 the day can be retried with the matching `--price-divisor`. See
-`tradedesk_dukascopy.scale_sentry` and RAD-1920 for the failure mode this
-catches.
+`tradedesk_dukascopy.scale_sentry` for the failure mode this catches —
+typically a cache stitched together from multiple `tradedesk-dc-export`
+runs that used different `--price-divisor` values.
 
 ## Data-quality audit scripts
 
@@ -171,7 +170,7 @@ Example:
 
 ```bash
 python scripts/dukascopy_audit.py \
-  --cache /paperclip/tradedesk/marketdata \
+  --cache ./cache \
   --instruments EURUSD GBPUSD USDJPY XAUUSD \
   --year-start 2024 \
   --year-end 2025 \
@@ -187,7 +186,7 @@ Example:
 
 ```bash
 python scripts/dukascopy_cross_provider.py \
-  --cache /paperclip/tradedesk/marketdata \
+  --cache ./cache \
   --instruments EURUSD GBPUSD USDJPY XAUUSD USA500IDXUSD \
   --start 2024-01-01 \
   --end 2025-12-31 \
@@ -200,14 +199,13 @@ whose median close falls outside an explicit FX-rate envelope (e.g.
 `[0.30, 2.00]` for NZDUSD-style 4-decimal FX), so caches that were exported
 with the wrong `--price-divisor` show up immediately. It reports per-year
 and day-of-week histograms, or with `--print-dates` emits one ISO date per
-line for shell pipelines (see RAD-2132 for the original NZDUSD remediation
-that motivated it).
+line for shell pipelines.
 
 Example:
 
 ```bash
-python scripts/audit_fx_scale.py NZDUSD --min 0.30 --max 2.00
-python scripts/audit_fx_scale.py NZDUSD --print-dates
+python scripts/audit_fx_scale.py NZDUSD --cache-dir ./cache --min 0.30 --max 2.00
+python scripts/audit_fx_scale.py NZDUSD --cache-dir ./cache --print-dates
 ```
 
 These scripts are intended for maintainers validating cached data quality, not

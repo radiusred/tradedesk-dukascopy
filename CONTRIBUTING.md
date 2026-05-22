@@ -113,6 +113,14 @@ fix(export): handle missing tick hours gracefully
 docs: update cache directory guidance
 ```
 
+Describe the symptom, instrument class, or component in prose. Do **not**
+reference downstream-private issue trackers (e.g. `RAD-1234`, `INTERNAL-42`)
+in commit messages, code comments, docstrings, README sections, or test
+descriptions. External readers cannot resolve those identifiers, so the
+prose description must stand on its own. Operator scripts that hardcode
+a single user's cache root or one-off remediation dates likewise do not
+belong in this repository.
+
 ## Reporting Issues
 
 If you find a bug or have a feature request, open an issue describing the goal

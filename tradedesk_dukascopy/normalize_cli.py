@@ -2,7 +2,7 @@
 
 Usage::
 
-    tradedesk-dc-normalize --cache-dir /path/to/marketdata [--symbols EURUSD AUDNZD] [--dry-run]
+    tradedesk-dc-normalize --cache-dir ./cache [--symbols EURUSD AUDNZD] [--dry-run]
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         "--cache-dir",
         type=Path,
         required=True,
-        help="Root cache directory (e.g. /paperclip/tradedesk/marketdata)",
+        help="Root cache directory (e.g. ./cache)",
     )
     parser.add_argument(
         "--symbols",

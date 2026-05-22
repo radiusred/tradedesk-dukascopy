@@ -6,8 +6,7 @@ Sibling to :mod:`tradedesk_dukascopy.normalize`, but with a different target:
 **existing dominant cache scale** by power-of-ten multiplication.  This is the
 right tool when the bulk of the cache is at one scale (e.g. ``--price-divisor
 10`` for FX/JPY pairs, which leaves USDJPY at ~15 700) and a small subset of
-days was overwritten by a later run with a different ``--price-divisor`` value
-(RAD-1920).
+days was overwritten by a later run with a different ``--price-divisor`` value.
 
 For each symbol the dominant scale is the median of all per-day median closes.
 For each day the rescale factor is the unique power of ten ``f ∈ {1e-4 … 1e4}``
