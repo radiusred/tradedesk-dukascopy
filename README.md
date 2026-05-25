@@ -112,9 +112,13 @@ tradedesk-dc-normalize --cache-dir ./cache --symbols EURUSD USDJPY
 ```
 
 `tradedesk-dc-normalize` rewrites cached daily candle files in place when it
-detects prices that are clearly outside the expected range for a symbol. This
-covers both caches written with the default `--price-divisor 1.0` for int32
-tick feeds and older cache files affected by a bad inferred divisor.
+detects prices that are clearly outside the expected real-price range for a
+symbol. It picks the power-of-ten factor in `[1e-5, 1e5]` whose result sits
+closest to the geometric midpoint of the band, so it corrects both
+**over-scaled** days (e.g. a `--price-divisor 1.0` cache that stored raw
+int32 ticks) and **under-scaled** days (e.g. a cache that was already
+divided too aggressively at export time). Days whose median price already
+falls inside the expected range are left untouched.
 
 The normalizer only updates the cached daily candle files under `--cache-dir`.
 If you already wrote range-level CSVs with `--out`, rerun your export command
