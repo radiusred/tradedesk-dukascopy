@@ -1,36 +1,40 @@
 """
 Normalize Dukascopy cache daily candle files with incorrect price scaling.
 
-Detects days where cached prices are scaled incorrectly based on instrument
-type, and divides by the correct factor in-place.
+Detects days where cached prices are off by a power of ten compared to the
+expected real-price range for the instrument, and corrects them in-place by
+multiplying every OHLC value by the inverse power of ten.
 
 Background
 ----------
-When ``tradedesk-dc-export`` is run with the default ``--price-divisor 1.0``
-the daily candle CSVs store raw bi5 integer tick values rather than real
-prices.  The correct divisor varies by instrument type:
+When ``tradedesk-dc-export`` is run with the wrong ``--price-divisor`` for a
+symbol the daily candle CSVs store prices that are off by a power of ten.
+The correct divisor varies by instrument type:
 
 * 4-decimal FX (EURUSD, AUDNZD, GBPUSD …): ÷100 000
 * 2-decimal FX / JPY crosses (USDJPY, AUDJPY …): ÷1 000
 * 2-decimal commodities (XAUUSD, XAGUSD …): ÷100
 
-A second class of miscalibration arises when ``infer_price_divisor`` selects
-the wrong divisor because the instrument's price has moved outside the
-expected range.  A known instance: XAUUSD files downloaded between 2026-01-25
-and 2026-03-10 were stored at ÷1 000 instead of ÷100 because gold broke
-$5 000 for the first time and the plausible-range guard was set too low
+A second class of miscalibration arises when the inferred divisor was the
+wrong one because the instrument's price had moved outside the expected
+range.  A known instance: XAUUSD files downloaded between 2026-01-25 and
+2026-03-10 were stored at ÷1 000 instead of ÷100 because gold broke $5 000
+for the first time and the plausible-range guard was set too low
 (``(500, 50_000)``).  The guard was corrected to ``(1_000, 50_000)`` in the
 same release that introduced this module.
 
-This module detects both classes of miscalibration by checking whether each
-day's median price falls within the expected instrument range, and corrects
-affected files in-place without re-downloading data from Dukascopy.
+Both classes of error reduce to the same shape: every OHLC value on the
+affected day is too large or too small by an integer power of ten.  This
+module detects that case and applies the inverse factor in-place without
+re-downloading data from Dukascopy.  Days where the price already falls
+inside the expected range are left untouched.
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -69,6 +73,7 @@ _IDX_SUBSTRINGS = ("IDX",)
 # bands eliminate that ambiguity.
 _INDEX_RANGES: dict[str, tuple[float, float]] = {
     "USA500IDXUSD": (1_000.0, 10_000.0),  # S&P 500: ~2400-7000 in our era
+    "USATECHIDXUSD": (2_000.0, 30_000.0),  # Nasdaq Composite: ~3500-22000
     "DEUIDXEUR": (3_000.0, 30_000.0),  # DAX: ~5000-25000
     "GBRIDXGBP": (2_000.0, 12_000.0),  # FTSE 100: ~3000-9000
     # Nikkei 225: broke 60k in Apr-2026; band wide enough to avoid the
@@ -77,7 +82,13 @@ _INDEX_RANGES: dict[str, tuple[float, float]] = {
     "AUSIDXAUD": (3_000.0, 12_000.0),  # ASX 200: ~4000-9000
 }
 # Crude oil and energy commodities quoted in USD per barrel (~20–200 range).
-_CRUDE_OIL = frozenset({"BRENTCMDUSD", "WTIOILUSD", "USOILUSD"})
+# LIGHTCMDUSD is Dukascopy's WTI light-sweet crude contract; treat identically.
+_CRUDE_OIL = frozenset({"BRENTCMDUSD", "WTIOILUSD", "USOILUSD", "LIGHTCMDUSD"})
+# Platinum-group metals quoted in USD/oz at higher levels than silver.
+_PALLADIUM = frozenset({"XPDCMDUSD"})
+_PLATINUM = frozenset({"XPTCMDUSD"})
+# European bond futures quoted as a price index in the 100–200 range.
+_BOND_FUTURE = frozenset({"BUNDTREUR"})
 # Pairs quoted above 5.0 in their natural rate (e.g. EURSEK ~11, EURNOK ~12).
 # Without this, infer_price_divisor selects ÷100000 instead of ÷10000 because
 # both results fall in the default FX range (0.3, 15.0).
@@ -97,9 +108,18 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
         return (1_000.0, 50_000.0)
     if upper in _SILVER:
         return (10.0, 500.0)
+    if upper in _PALLADIUM:
+        # Palladium has traded $200 (2003) to $3 400 (2022); band kept wide.
+        return (100.0, 5_000.0)
+    if upper in _PLATINUM:
+        # Platinum has traded $400 (2002) to $2 250 (2008); band kept wide.
+        return (200.0, 3_000.0)
     if upper in _CRUDE_OIL:
         # Crude oil quoted in USD per barrel; range covers post-2000 extremes.
         return (10.0, 250.0)
+    if upper in _BOND_FUTURE:
+        # Euro Bund Future trades roughly 110–180 as a price index.
+        return (80.0, 200.0)
     if upper in _HIGH_RATE_FX:
         # Pairs with a natural rate above 5 — prevent over-division by 100000.
         return (5.0, 20.0)
@@ -112,23 +132,74 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
     return (0.3, 15.0)
 
 
+# Candidate multiplicative corrections, ordered from strongest divide (1e-5)
+# through unity to strongest multiply (1e5).  Symmetric around 1.0 so the
+# same routine fixes days that were exported with a divisor that was too
+# small OR too large for the symbol.
+_CORRECTION_FACTORS: tuple[float, ...] = (
+    1e-5,
+    1e-4,
+    1e-3,
+    1e-2,
+    1e-1,
+    1.0,
+    1e1,
+    1e2,
+    1e3,
+    1e4,
+    1e5,
+)
+
+
+def infer_correction_factor(
+    median_close: float,
+    price_min: float,
+    price_max: float,
+) -> float:
+    """Return the power-of-ten factor *f* such that ``median_close * f`` lies
+    inside ``[price_min, price_max]``.
+
+    When several candidate factors all land inside the band — possible on
+    wide bands — the factor whose result sits closest to the band's geometric
+    midpoint (i.e. the centre in log10 space) is preferred.  This avoids
+    snapping a barely-out value past the midpoint and out the other side.
+
+    Returns ``1.0`` when the price is already inside the band or when no
+    candidate succeeds (e.g. a corrupt or extreme value that cannot be
+    reconciled by a power-of-ten correction).
+    """
+    if median_close <= 0.0 or price_min <= 0.0 or price_max <= 0.0:
+        return 1.0
+    if price_min <= median_close <= price_max:
+        return 1.0
+    mid_log = (math.log10(price_min) + math.log10(price_max)) / 2.0
+    best: tuple[float, float] | None = None  # (distance_to_mid, factor)
+    for factor in _CORRECTION_FACTORS:
+        scaled = median_close * factor
+        if price_min <= scaled <= price_max:
+            distance = abs(math.log10(scaled) - mid_log)
+            if best is None or distance < best[0]:
+                best = (distance, factor)
+    return 1.0 if best is None else best[1]
+
+
 def infer_price_divisor(
     median_close: float,
     price_min: float,
     price_max: float,
 ) -> float:
-    """Return the divisor that brings *median_close* into [price_min, price_max].
+    """Return the divisor that brings an over-scaled *median_close* into range.
 
-    Tries candidate divisors in order (largest first) and returns the first
-    that puts the adjusted price inside the expected range.  Returns ``1.0``
-    if the price is already in range, or if no candidate works.
+    Thin wrapper over :func:`infer_correction_factor` that preserves the
+    historical "divisor" semantics: returns a value ``>= 1.0`` representing
+    the integer power of ten by which the stored value is too large.  When
+    the value is already correct, or is too small (multiply needed), or no
+    correction can be inferred, returns ``1.0``.
     """
-    if price_min <= median_close <= price_max:
+    factor = infer_correction_factor(median_close, price_min, price_max)
+    if factor >= 1.0:
         return 1.0
-    for divisor in (100_000.0, 10_000.0, 1_000.0, 100.0, 10.0):
-        if price_min <= (median_close / divisor) <= price_max:
-            return divisor
-    return 1.0  # cannot determine — leave unchanged
+    return 1.0 / factor
 
 
 # ---------------------------------------------------------------------------
@@ -212,29 +283,32 @@ def normalize_symbol(
                     result["skipped"] += 1
                     continue
 
-                divisor = infer_price_divisor(median, price_min, price_max)
-                if divisor == 1.0:
+                factor = infer_correction_factor(median, price_min, price_max)
+                if factor == 1.0:
                     continue  # already correct
 
                 day_label = f"{year_dir.name}/{month_dir.name}/{bid_path.name[:2]}"
-                log.info(
-                    "%s %s: median close %.4f is %.0f× too large — %s by %.0f",
-                    symbol,
-                    day_label,
-                    median,
-                    divisor,
-                    "would divide" if dry_run else "dividing",
-                    divisor,
-                )
+                if factor < 1.0:
+                    action = "would divide" if dry_run else "dividing"
+                    log.info(
+                        "%s %s: median close %.4f is %.0f× too large — %s by %.0f",
+                        symbol, day_label, median, 1.0 / factor, action, 1.0 / factor,
+                    )
+                else:
+                    action = "would multiply" if dry_run else "multiplying"
+                    log.info(
+                        "%s %s: median close %.4f is %.0f× too small — %s by %.0f",
+                        symbol, day_label, median, factor, action, factor,
+                    )
 
                 result["fixed"] += 1
                 if dry_run:
                     continue
 
-                # Apply divisor to bid OHLC (not volume)
+                # Apply factor to bid OHLC (not volume)
                 price_cols = ["open", "high", "low", "close"]
                 for col in price_cols:
-                    df_bid[col] = df_bid[col] / divisor
+                    df_bid[col] = df_bid[col] * factor
                 try:
                     _write_zst(df_bid, bid_path)
                 except Exception as exc:
@@ -242,11 +316,11 @@ def normalize_symbol(
                     result["errors"] += 1
                     continue
 
-                # Apply same divisor to ask
+                # Apply same factor to ask
                 df_ask = _read_zst(ask_path)
                 if df_ask is not None and not df_ask.empty:
                     for col in price_cols:
-                        df_ask[col] = df_ask[col] / divisor
+                        df_ask[col] = df_ask[col] * factor
                     try:
                         _write_zst(df_ask, ask_path)
                     except Exception as exc:
