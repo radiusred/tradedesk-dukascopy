@@ -12,6 +12,7 @@ from tradedesk_dukascopy.normalize import (
     _expected_price_range,
     _read_zst,
     _write_zst,
+    infer_correction_factor,
     infer_price_divisor,
     normalize_cache,
     normalize_symbol,
@@ -239,6 +240,124 @@ def test_infer_divisor_returns_1_when_no_candidate_works() -> None:
     assert infer_price_divisor(0.00001, lo, hi) == 1.0
 
 
+def test_infer_divisor_returns_1_when_value_too_small_in_jpy_band() -> None:
+    # infer_price_divisor only reports "divide" corrections; a value that is
+    # too small (multiply needed) must yield 1.0 from this wrapper even
+    # though the underlying factor-finder can fix it.
+    lo, hi = _expected_price_range("USDJPY")
+    assert infer_price_divisor(1.59, lo, hi) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# infer_correction_factor (bidirectional)
+# ---------------------------------------------------------------------------
+
+
+def test_infer_factor_already_in_range_returns_1() -> None:
+    lo, hi = _expected_price_range("USDJPY")
+    assert infer_correction_factor(155.0, lo, hi) == 1.0
+
+
+def test_infer_factor_jpy_100x_too_small_multiplies_by_100() -> None:
+    # USDJPY stored at 1.59 (×0.01 of real ~159) — must multiply by 100.
+    lo, hi = _expected_price_range("USDJPY")
+    assert infer_correction_factor(1.59, lo, hi) == 100.0
+
+
+def test_infer_factor_jpy_10x_too_small_multiplies_by_10() -> None:
+    # USDJPY stored at 15.5 — needs ×10 to reach 155.
+    lo, hi = _expected_price_range("USDJPY")
+    assert infer_correction_factor(15.5, lo, hi) == 10.0
+
+
+def test_infer_factor_jpy_100x_too_large_divides_by_100() -> None:
+    # USDJPY stored at 15500 — needs ÷100. infer_correction_factor returns
+    # the multiplicative factor 0.01.
+    lo, hi = _expected_price_range("USDJPY")
+    assert infer_correction_factor(15_500.0, lo, hi) == pytest.approx(0.01)
+
+
+def test_infer_factor_fx_10000x_too_large_divides_by_10000() -> None:
+    lo, hi = _expected_price_range("EURUSD")
+    # EURUSD raw 11000 → 1.10 (factor = 1e-4).
+    assert infer_correction_factor(11_000.0, lo, hi) == pytest.approx(1e-4)
+
+
+def test_infer_factor_returns_1_when_value_off_by_non_power_of_ten() -> None:
+    # 2.5 cannot reach the USDJPY band [50, 500] via any power of ten:
+    # ×10 = 25 (still below), ×100 = 250 (in band!).
+    # Confirm the in-band candidate wins.
+    lo, hi = _expected_price_range("USDJPY")
+    assert infer_correction_factor(2.5, lo, hi) == 100.0
+    # A value too small even for ×1e5 returns 1.0 (unfixable).
+    assert infer_correction_factor(1e-10, lo, hi) == 1.0
+
+
+def test_infer_factor_picks_factor_closest_to_log_midpoint() -> None:
+    # XAUUSD band [1000, 50000], log-midpoint ≈ 7071.  A raw value of 80
+    # has two viable multiplications: ×100 → 8000 (close to mid), ×1000 →
+    # 80 000 (out).  Only ×100 lands inside, so the choice is unambiguous.
+    lo, hi = _expected_price_range("XAUUSD")
+    assert infer_correction_factor(80.0, lo, hi) == 100.0
+
+
+def test_infer_factor_handles_zero_and_negative() -> None:
+    lo, hi = _expected_price_range("EURUSD")
+    assert infer_correction_factor(0.0, lo, hi) == 1.0
+    assert infer_correction_factor(-1.0, lo, hi) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# New per-symbol bands
+# ---------------------------------------------------------------------------
+
+
+def test_expected_price_range_light_crude() -> None:
+    # LIGHTCMDUSD is WTI light-sweet crude; same envelope as Brent.
+    lo, hi = _expected_price_range("LIGHTCMDUSD")
+    assert lo == 10.0
+    assert hi == 250.0
+
+
+def test_expected_price_range_palladium() -> None:
+    lo, hi = _expected_price_range("XPDCMDUSD")
+    # Covers both the 2003 low (~$200) and the 2022 high (~$3 400).
+    assert lo <= 200.0
+    assert hi >= 3_400.0
+
+
+def test_expected_price_range_platinum() -> None:
+    lo, hi = _expected_price_range("XPTCMDUSD")
+    # Covers both the 2002 low (~$400) and the 2008 high (~$2 250).
+    assert lo <= 400.0
+    assert hi >= 2_250.0
+
+
+def test_expected_price_range_bund_future() -> None:
+    lo, hi = _expected_price_range("BUNDTREUR")
+    # Euro Bund Future trades 100–180 as a price index.
+    assert lo <= 100.0
+    assert hi >= 180.0
+
+
+def test_expected_price_range_nasdaq() -> None:
+    lo, hi = _expected_price_range("USATECHIDXUSD")
+    # Nasdaq Composite has ranged ~3500 (2018) to ~22000 (2025).
+    assert lo <= 3_500.0
+    assert hi >= 20_000.0
+
+
+def test_infer_factor_nasdaq_correct_left_unchanged() -> None:
+    lo, hi = _expected_price_range("USATECHIDXUSD")
+    assert infer_correction_factor(15_000.0, lo, hi) == 1.0
+
+
+def test_infer_factor_palladium_1000x_too_large_divides_by_1000() -> None:
+    lo, hi = _expected_price_range("XPDCMDUSD")
+    # Stored raw ~1.5e6 — divide by 1000 → 1500 (palladium 2024 ≈ $1 000).
+    assert infer_correction_factor(1_500_000.0, lo, hi) == pytest.approx(1e-3)
+
+
 # ---------------------------------------------------------------------------
 # _read_zst / _write_zst round-trip
 # ---------------------------------------------------------------------------
@@ -311,6 +430,49 @@ def test_normalize_symbol_jpy_corrects_100x(tmp_path: Path) -> None:
 
     assert result["fixed"] == 1
     assert abs(_read_median_close(bid_path) - 155.0) < 0.5
+
+
+def test_normalize_symbol_jpy_corrects_100x_too_small(tmp_path: Path) -> None:
+    """JPY cross stored 100× too small (exported with too-large divisor) must
+    be multiplied back into the natural-units band — the symmetric inverse
+    of the over-scaled case."""
+    symbol = "USDJPY"
+    # USDJPY real price ≈ 159 → stored as 1.59 (off by a factor of 100).
+    bid_path, ask_path = _make_cache_day(tmp_path, symbol, 2026, 2, 6, 1.59, 1.595)
+
+    result = normalize_symbol(tmp_path / symbol, symbol)
+
+    assert result["fixed"] == 1
+    assert result["errors"] == 0
+    assert abs(_read_median_close(bid_path) - 159.0) < 0.5
+    assert abs(_read_median_close(ask_path) - 159.5) < 0.5
+
+
+def test_normalize_symbol_idempotent_on_correctly_priced_data(tmp_path: Path) -> None:
+    """Re-running on already-correct data is a no-op (acceptance criterion:
+    a second --dry-run reports zero days needing rescale)."""
+    symbol = "USDJPY"
+    bid_path, _ = _make_cache_day(tmp_path, symbol, 2026, 2, 7, 158.9, 159.0)
+    # First pass: nothing to fix.
+    first = normalize_symbol(tmp_path / symbol, symbol)
+    assert first["fixed"] == 0
+    # Second pass: still nothing to fix; file untouched.
+    second = normalize_symbol(tmp_path / symbol, symbol)
+    assert second["fixed"] == 0
+    assert abs(_read_median_close(bid_path) - 158.9) < 0.01
+
+
+def test_normalize_symbol_round_trip_multiply_then_dry_run_finds_nothing(
+    tmp_path: Path,
+) -> None:
+    """Apply a multiply correction; a follow-up dry-run must report zero days
+    needing further rescale — the post-condition of the whole-cache fix."""
+    symbol = "USDJPY"
+    _make_cache_day(tmp_path, symbol, 2026, 2, 8, 1.59, 1.595)
+    fixed = normalize_symbol(tmp_path / symbol, symbol)
+    assert fixed["fixed"] == 1
+    audit = normalize_symbol(tmp_path / symbol, symbol, dry_run=True)
+    assert audit["fixed"] == 0
 
 
 def test_normalize_symbol_jpy_leaves_correct_unchanged(tmp_path: Path) -> None:
