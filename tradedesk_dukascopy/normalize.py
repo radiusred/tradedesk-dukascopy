@@ -84,6 +84,13 @@ _INDEX_RANGES: dict[str, tuple[float, float]] = {
 # Crude oil and energy commodities quoted in USD per barrel (~20–200 range).
 # LIGHTCMDUSD is Dukascopy's WTI light-sweet crude contract; treat identically.
 _CRUDE_OIL = frozenset({"BRENTCMDUSD", "WTIOILUSD", "USOILUSD", "LIGHTCMDUSD"})
+# COMEX copper futures quoted in USD/lb. Historical envelope $0.50 (1999) to
+# $6.40 (2026-04 spike). Without an explicit band, the standard FX default
+# (0.3, 5.0) would treat any post-2024 day above $5 as 10× too large and
+# corrupt the file.
+_COPPER = frozenset({"COPPERCMDUSD"})
+# Henry-Hub natural gas in USD/MMBtu. Has spiked to ~$13 (2008, 2022).
+_NATGAS = frozenset({"GASCMDUSD", "NATGASCMDUSD"})
 # Platinum-group metals quoted in USD/oz at higher levels than silver.
 _PALLADIUM = frozenset({"XPDCMDUSD"})
 _PLATINUM = frozenset({"XPTCMDUSD"})
@@ -117,6 +124,14 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
     if upper in _CRUDE_OIL:
         # Crude oil quoted in USD per barrel; range covers post-2000 extremes.
         return (10.0, 250.0)
+    if upper in _COPPER:
+        # COMEX copper futures USD/lb. Wide enough to cover the 2026-04 spike
+        # to $6.40 yet still flag a 10× drift (would land >50).
+        return (0.3, 15.0)
+    if upper in _NATGAS:
+        # Henry-Hub natural gas USD/MMBtu. Wide enough to cover the 2008/2022
+        # ~$13 spikes yet still flag a 10× drift.
+        return (0.5, 25.0)
     if upper in _BOND_FUTURE:
         # Euro Bund Future trades roughly 110–180 as a price index.
         return (80.0, 200.0)
@@ -128,8 +143,11 @@ def _expected_price_range(symbol: str) -> tuple[float, float]:
     if any(s in upper for s in _IDX_SUBSTRINGS):
         # Generic fallback for unknown indices; deliberately wide.
         return (100.0, 500_000.0)
-    # Standard 4-decimal FX pairs
-    return (0.3, 15.0)
+    # Standard 4-decimal FX pairs. Upper bound is 5.0 (not 15.0) so that a
+    # value stuck 10× too high — e.g. NZDUSD at 5.87 instead of 0.587 — is
+    # detected and corrected. Pairs whose natural rate exceeds 5 (SEK/NOK
+    # crosses) live in _HIGH_RATE_FX with their own (5.0, 20.0) band.
+    return (0.3, 5.0)
 
 
 # Candidate multiplicative corrections, ordered from strongest divide (1e-5)

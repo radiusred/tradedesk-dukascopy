@@ -152,10 +152,81 @@ def test_expected_price_range_fx4() -> None:
     assert hi < 20
 
 
+def test_expected_price_range_fx4_upper_excludes_10x_drift() -> None:
+    # Regression for RAD-2761: NZDUSD stored at 5.87 (10× too high) must
+    # fall OUTSIDE the standard FX band so normalize flags it.  An upper
+    # bound of 15.0 was too lax — 5.87 was admitted and the file was left
+    # alone.  A tighter upper of 5.0 still admits every major non-JPY/
+    # non-high-rate FX cross while catching a 10× shift.
+    lo, hi = _expected_price_range("NZDUSD")
+    assert hi <= 5.0
+    assert not (lo <= 5.87 <= hi)
+
+
+def test_infer_factor_nzdusd_10x_too_large_divides_by_10() -> None:
+    # RAD-2761: NZDUSD median 5.87 must collapse to 0.587 (factor 0.1).
+    lo, hi = _expected_price_range("NZDUSD")
+    assert infer_correction_factor(5.87, lo, hi) == pytest.approx(0.1)
+
+
+def test_infer_factor_nzdusd_already_correct_left_unchanged() -> None:
+    # Sanity: a correct NZDUSD value (~0.587) must not be touched.
+    lo, hi = _expected_price_range("NZDUSD")
+    assert infer_correction_factor(0.587, lo, hi) == 1.0
+
+
+def test_infer_factor_fx_majors_in_their_natural_range_left_unchanged() -> None:
+    # Every non-JPY, non-high-rate FX cross in our universe must sit inside
+    # the tightened standard band — protects against false positives.
+    for sym, natural in {
+        "AUDCAD": 0.90,  "AUDNZD": 1.09,  "AUDUSD": 0.66,
+        "EURCAD": 1.49,  "EURCHF": 0.94,  "EURGBP": 0.84,
+        "EURSGD": 1.46,  "EURUSD": 1.10,  "GBPAUD": 1.95,
+        "GBPCHF": 1.13,  "GBPUSD": 1.27,  "NZDCAD": 0.83,
+        "NZDUSD": 0.59,  "USDCAD": 1.36,  "USDCHF": 0.85,
+    }.items():
+        lo, hi = _expected_price_range(sym)
+        assert infer_correction_factor(natural, lo, hi) == 1.0, (
+            f"{sym} natural {natural} unexpectedly outside band {lo}-{hi}"
+        )
+
+
 def test_expected_price_range_crude_oil() -> None:
     lo, hi = _expected_price_range("BRENTCMDUSD")
     assert lo <= 20.0
     assert hi >= 150.0
+
+
+def test_expected_price_range_copper_covers_2026_spike() -> None:
+    # COMEX copper futures USD/lb hit $6.40 in 2026-04. The standard FX
+    # default (0.3, 5.0) would corrupt these legit days — copper needs its
+    # own wider band.
+    lo, hi = _expected_price_range("COPPERCMDUSD")
+    assert lo <= 0.5
+    assert hi >= 6.4
+
+
+def test_infer_factor_copper_at_real_price_left_unchanged() -> None:
+    lo, hi = _expected_price_range("COPPERCMDUSD")
+    # 2026-04-22: real copper 6.36 USD/lb — must not be flagged.
+    assert infer_correction_factor(6.36, lo, hi) == 1.0
+    # 1999 low: real copper 0.65 USD/lb.
+    assert infer_correction_factor(0.65, lo, hi) == 1.0
+
+
+def test_expected_price_range_natgas() -> None:
+    # Henry-Hub natural gas USD/MMBtu; envelope covers $1.50 (2020) – $13 (2008/2022).
+    lo, hi = _expected_price_range("GASCMDUSD")
+    assert lo <= 1.5
+    assert hi >= 13.0
+
+
+def test_infer_factor_natgas_real_values_left_unchanged() -> None:
+    lo, hi = _expected_price_range("GASCMDUSD")
+    # 2022 spike to ~$9 MMBtu — real, not a 10× drift.
+    assert infer_correction_factor(9.0, lo, hi) == 1.0
+    # 2020 trough ~$1.70 — real.
+    assert infer_correction_factor(1.70, lo, hi) == 1.0
 
 
 def test_expected_price_range_high_rate_fx() -> None:
