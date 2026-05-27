@@ -279,6 +279,64 @@ def test_early_exit_returns_none_tuple_when_no_resample_and_all_cached(monkeypat
 
 
 # ---------------------------------------------------------------------------
+# Self-heal: re-export removes a leftover .bi5 dir for a fully-cached day
+# ---------------------------------------------------------------------------
+
+
+def test_reexport_self_heals_leftover_bi5_dir_for_cached_day(monkeypatch, tmp_path):
+    """RAD-3015: a fully-cached day whose .bi5 dir was left behind (export
+    interrupted before bi5 deletion) is self-healed on re-export — the bi5 dir
+    is removed and the daily-candle CSVs are left untouched. Before this fix the
+    day was skipped as fully-cached and the leftover .bi5 dir was permanent,
+    tripping the consumer's _check_old_format guard (see RAD-3009)."""
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "out"
+
+    start = datetime(2025, 3, 1, 0, 0, tzinfo=UTC)
+    day = start.date()
+    hours = [start, start + timedelta(hours=1)]
+
+    # Day is fully cached: both daily-candle CSVs already exist.
+    _make_and_write_candle_cache(cache_dir, "EURUSD", start, day)
+    bid_csv = ex._daily_candle_path(cache_dir, "EURUSD", day, "bid")
+    ask_csv = ex._daily_candle_path(cache_dir, "EURUSD", day, "ask")
+    bid_bytes_before = bid_csv.read_bytes()
+    ask_bytes_before = ask_csv.read_bytes()
+
+    # Leftover .bi5 day-dir from a run interrupted before deleting its bi5 files.
+    day_dir = (
+        cache_dir / "EURUSD" / f"{start.year}" / f"{start.month - 1:02d}" / f"{start.day:02d}"
+    )
+    day_dir.mkdir(parents=True, exist_ok=True)
+    (day_dir / "00h_ticks.bi5").write_bytes(b"leftover")
+    (day_dir / "01h_ticks.bi5").write_bytes(b"leftover")
+
+    # A re-export of a fully-cached day must not download anything.
+    def fake_download(*_, **__):
+        raise AssertionError("re-export of a fully-cached day must not download")
+
+    monkeypatch.setattr(ex, "_iter_hours", lambda *_: iter(hours))
+    monkeypatch.setattr(ex, "_download_bi5", fake_download)
+
+    ex.export_range(
+        symbol="EURUSD",
+        start_utc=start,
+        end_utc_inclusive=start + timedelta(hours=1),
+        out=out_dir,
+        price_divisor=1.0,
+        resample_rule="1min",
+        cache_dir=cache_dir,
+        probe=False,
+    )
+
+    # The redundant bi5 day-dir is gone...
+    assert not day_dir.exists(), "leftover bi5 day-dir must be removed on re-export"
+    # ...and the candle CSVs are byte-for-byte untouched.
+    assert bid_csv.read_bytes() == bid_bytes_before
+    assert ask_csv.read_bytes() == ask_bytes_before
+
+
+# ---------------------------------------------------------------------------
 # Output CSV filenames include _bid / _ask
 # ---------------------------------------------------------------------------
 

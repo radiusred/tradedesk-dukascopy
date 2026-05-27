@@ -109,6 +109,44 @@ def test_cleanup_removes_empty_day_dirs(tmp_path: Path) -> None:
     assert non_empty_dir.exists()
 
 
+def test_cleanup_removes_redundant_bi5_dir_when_candle_csvs_exist(tmp_path: Path) -> None:
+    # RAD-3015: a non-empty bi5 day-dir is removed when both daily-candle CSVs
+    # for that day exist (the .bi5 are redundant once candles are written).
+    symbol = "EURUSD"
+    leftover_dir = tmp_path / symbol / "2025" / "00" / "15"
+    leftover_dir.mkdir(parents=True)
+    (leftover_dir / "00h_ticks.bi5").write_bytes(b"data")
+    (leftover_dir / "01h_ticks.bi5").write_bytes(b"data")
+
+    # Candle CSVs are siblings in the month dir: {DD}_bid.csv.zst / {DD}_ask.csv.zst.
+    month_dir = tmp_path / symbol / "2025" / "00"
+    (month_dir / "15_bid.csv.zst").write_bytes(b"candles")
+    (month_dir / "15_ask.csv.zst").write_bytes(b"candles")
+
+    ex._cleanup_empty_day_dirs(tmp_path, symbol)
+
+    assert not leftover_dir.exists(), "redundant bi5 day-dir must be removed once candles exist"
+    # The candle CSVs themselves must be left untouched.
+    assert (month_dir / "15_bid.csv.zst").read_bytes() == b"candles"
+    assert (month_dir / "15_ask.csv.zst").read_bytes() == b"candles"
+
+
+def test_cleanup_preserves_bi5_dir_when_only_one_candle_csv_exists(tmp_path: Path) -> None:
+    # RAD-3015: a partial candle pair (only bid written) is NOT a complete day,
+    # so the bi5 must be kept for a retry to finish committing it.
+    symbol = "EURUSD"
+    leftover_dir = tmp_path / symbol / "2025" / "00" / "15"
+    leftover_dir.mkdir(parents=True)
+    (leftover_dir / "00h_ticks.bi5").write_bytes(b"data")
+
+    month_dir = tmp_path / symbol / "2025" / "00"
+    (month_dir / "15_bid.csv.zst").write_bytes(b"candles")  # ask missing
+
+    ex._cleanup_empty_day_dirs(tmp_path, symbol)
+
+    assert leftover_dir.exists(), "bi5 day-dir must be kept when the candle pair is incomplete"
+
+
 def test_cleanup_is_noop_for_missing_symbol_dir(tmp_path: Path) -> None:
     # Should not raise even if symbol dir doesn't exist
     ex._cleanup_empty_day_dirs(tmp_path, "GBPUSD")

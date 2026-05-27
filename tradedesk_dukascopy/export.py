@@ -34,6 +34,7 @@ import io
 import logging
 import lzma
 import math
+import shutil
 import struct
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -400,8 +401,30 @@ def _daily_candle_path(cache_dir: Path, symbol: str, day: date, side: str) -> Pa
     )
 
 
-def _cleanup_empty_day_dirs(cache_dir: Path, symbol: str) -> None:
-    """Remove empty day directories left over after bi5 file deletion."""
+def _cleanup_stale_day_dirs(cache_dir: Path, symbol: str) -> None:
+    """Remove leftover ``.bi5`` day directories that are redundant or empty.
+
+    A day directory (``{symbol}/YYYY/MM/DD/``) holds the raw hourly ``.bi5``
+    tick files for one day. Those files are redundant once that day's two
+    daily-candle CSVs (``DD_bid.csv.zst`` and ``DD_ask.csv.zst``, written as
+    siblings in the month directory) exist. We remove a day directory when:
+
+      - it is **empty** (the normal post-flush state where every ``.bi5`` was
+        already deleted but the ``rmdir`` never ran), or
+      - it is **non-empty but both candle CSVs for that day already exist**.
+
+    The second case self-heals a run that wrote the candle CSVs but was
+    interrupted before deleting (all of) its ``.bi5``. Without this, the day is
+    permanently stuck: ``export_range`` marks it fully-cached and skips
+    download/decode, so the leftover ``.bi5`` are never cleaned, and the
+    consumer's ``_check_old_format`` guard hard-fails any backtest touching the
+    day. Re-running the export now repairs it (matching the documented
+    "re-run tradedesk-dc-export" remediation). The raw ``.bi5`` are losslessly
+    reproducible, so removing them once candles exist is safe.
+
+    Day directories with leftover ``.bi5`` but **no** complete candle pair are
+    left untouched so a subsequent run can still finish committing the day.
+    """
     sym_dir = cache_dir / symbol
     if not sym_dir.is_dir():
         return
@@ -412,11 +435,30 @@ def _cleanup_empty_day_dirs(cache_dir: Path, symbol: str) -> None:
             if not month_dir.is_dir():
                 continue
             for day_dir in month_dir.iterdir():
-                if day_dir.is_dir() and not any(day_dir.iterdir()):
+                if not day_dir.is_dir():
+                    continue
+                if not any(day_dir.iterdir()):
                     try:
                         day_dir.rmdir()
                     except OSError:
                         pass
+                    continue
+                # Non-empty: only remove if both daily-candle CSVs exist, in
+                # which case the leftover .bi5 are redundant and removable.
+                bid_csv = month_dir / f"{day_dir.name}_bid.csv.zst"
+                ask_csv = month_dir / f"{day_dir.name}_ask.csv.zst"
+                if bid_csv.exists() and ask_csv.exists():
+                    try:
+                        shutil.rmtree(day_dir)
+                    except OSError:
+                        log.warning(
+                            "%s: could not remove redundant bi5 day-dir %s", symbol, day_dir
+                        )
+
+
+# Backwards-compatible alias: this function historically only pruned empty
+# directories; it now also self-heals redundant non-empty ones (RAD-3015).
+_cleanup_empty_day_dirs = _cleanup_stale_day_dirs
 
 
 def _candles_to_candles(df: pd.DataFrame, resample_rule: str) -> pd.DataFrame:
@@ -539,7 +581,8 @@ def export_range(
 
     # Pre-check: identify days where daily 1-min candle CSVs already exist.
     # Those days skip .bi5 download and decode entirely.
-    # Remove empty day directories left from previous bi5 cleanup runs.
+    # Prune leftover bi5 day-dirs (empty, or redundant where candle CSVs exist)
+    # so a re-export self-heals dirs interrupted mid-deletion (RAD-3015).
     days_fully_cached: set[date] = set()
     unique_days: set[date] = set()
     if cache_dir is not None:
@@ -549,7 +592,7 @@ def export_range(
             ask_path = _daily_candle_path(cache_dir, symbol, day, "ask")
             if bid_path.exists() and ask_path.exists():
                 days_fully_cached.add(day)
-        _cleanup_empty_day_dirs(cache_dir, symbol)
+        _cleanup_stale_day_dirs(cache_dir, symbol)
 
     # Early exit: if every day is cached there may be nothing to (re)generate.
     if cache_dir is not None and unique_days and days_fully_cached == unique_days:
