@@ -31,6 +31,7 @@ Examples:
 """
 
 import io
+import json
 import logging
 import lzma
 import math
@@ -39,7 +40,7 @@ import struct
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -489,6 +490,39 @@ def _write_daily_candles(df: pd.DataFrame, path: Path) -> None:
     tmp.replace(path)
 
 
+def _partial_day_manifest_path(cache_dir: Path, symbol: str) -> Path:
+    """Path to a symbol's append-only partial-day manifest."""
+    return cache_dir / symbol / "_partial_days.jsonl"
+
+
+def _append_partial_day_manifest(
+    cache_dir: Path,
+    symbol: str,
+    day: date,
+    missing_hours: list[int],
+    gap_reason: str,
+) -> None:
+    """Record a partial-day commit in the per-symbol manifest.
+
+    A *partial day* is one that was committed to daily candle CSVs despite
+    holding one or more permanently-absent hours (404 / decode-failure that
+    never resolved). The manifest makes "known-permanent gap, not a bug"
+    machine-readable for downstream data-quality checks without changing the
+    candle-CSV schema. One JSON object per line, append-only; safe because a
+    given symbol is exported by a single worker thread.
+    """
+    manifest = _partial_day_manifest_path(cache_dir, symbol)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "day": day.isoformat(),
+        "missing_hours": missing_hours,
+        "gap_reason": gap_reason,
+        "committed_at": datetime.now(UTC).isoformat(),
+    }
+    with open(manifest, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 def _load_daily_candles(path: Path) -> pd.DataFrame | None:
     """Read a Zstandard-compressed 1-min candle CSV. Returns None on missing file or parse error."""
     try:
@@ -514,6 +548,7 @@ def export_range(
     cache_dir: Path | None,
     probe: bool = False,
     probe_ticks: int = 10,
+    commit_partial_after_days: int = 7,
     progress: "Progress | None" = None,
 ) -> tuple[Path | None, Path | None]:
     """
@@ -535,7 +570,20 @@ def export_range(
       - A day is only committed to candle CSVs when every hour has a
         definitive result (successfully decoded or legitimate empty-200). Hours
         with 404 or decode failures leave the day uncommitted so the next run
-        can retry.
+        can retry — UNLESS the day is older than ``commit_partial_after_days``,
+        in which case the gap is treated as permanent (Dukascopy historical
+        ticks are immutable and published with <1-day lag) and the day is
+        *partial-committed*: candle CSVs are written from the hours that did
+        decode, the bi5 are deleted, and the day is recorded in the per-symbol
+        ``_partial_days.jsonl`` manifest. Days rejected by the scale-sentry are
+        never partial-committed (a wrong-scale day must be re-run with the
+        correct ``--price-divisor``, not committed).
+
+    commit_partial_after_days:
+        Age threshold (in days, UTC) past which a permanent-gap day (404 /
+        decode-failure hours) is committed from its available hours instead of
+        being left for retry. Default 7. ``0`` commits any permanent-gap day
+        immediately (used by the orphan-cache backfill sweep).
     """
 
     # counters
@@ -547,6 +595,9 @@ def export_range(
     hours_resampled_nonempty = 0
     hours_loaded_from_cache = 0
     days_rejected_scale_sentry = 0
+    days_committed_partial = 0
+
+    today_utc = datetime.now(UTC).date()
 
     detected_format: str | None = None
     symbol = _symbol_normalise(symbol)
@@ -565,9 +616,18 @@ def export_range(
     day_bid_frames: dict[date, list[pd.DataFrame]] = {}
     day_ask_frames: dict[date, list[pd.DataFrame]] = {}
 
-    # Days where at least one hour had a non-definitive result (404 / decode failure).
-    # These days are NOT written to daily CSVs so the next run can retry.
-    day_has_gaps: set[date] = set()
+    # Days with >=1 permanent-gap hour (404 / decode failure). These are not
+    # written to daily CSVs until they age past commit_partial_after_days, at
+    # which point the gap is treated as permanent and the day is partial-committed.
+    day_perm_gap: set[date] = set()
+    # Days rejected by the scale-sentry (price-scale divergence). These must
+    # NEVER be partial-committed — they need a re-run with the correct
+    # --price-divisor, not commitment. Scale-rejection dominates a gap.
+    day_scale_rejected: set[date] = set()
+    # Permanent-gap hours per day (for the partial-day manifest).
+    day_missing_hours: dict[date, set[int]] = {}
+    # Gap reason(s) per day: "missing_404" and/or "decode_failed".
+    day_gap_reasons: dict[date, set[str]] = {}
 
     # Collect all hours to download
     hours_to_fetch = list(_iter_hours(start_utc, end_exclusive))
@@ -708,13 +768,25 @@ def export_range(
         if progress is not None and rs_task_id is not None and resample_rule is not None:
             progress.update(rs_task_id, advance=1)
 
+    def _mark_perm_gap(day: date, hour: int, reason: str) -> None:
+        """Record a permanent-gap hour (404 / decode-failure) for a day."""
+        day_perm_gap.add(day)
+        day_missing_hours.setdefault(day, set()).add(hour)
+        day_gap_reasons.setdefault(day, set()).add(reason)
+
     def _flush_day(day: date) -> None:
         """
         Write daily 1-min candle CSVs (bid + ask, compressed) and delete .bi5 files + day
-        directory, but only if the day completed without gaps (no 404s or decode failures).
-        Always advances the cache progress task.
+        directory.
+
+        A clean day (no 404s or decode failures) is always committed. A day with
+        a permanent-gap hour is committed from its available hours only once it
+        is older than ``commit_partial_after_days`` — a *partial commit* recorded
+        in the per-symbol manifest. Younger gap days are left for retry, and
+        scale-sentry-rejected days are never committed. Always advances the
+        cache progress task.
         """
-        nonlocal days_rejected_scale_sentry
+        nonlocal days_rejected_scale_sentry, days_committed_partial
         bid_frames = day_bid_frames.pop(day, [])
         ask_frames = day_ask_frames.pop(day, [])
 
@@ -722,7 +794,16 @@ def export_range(
             if progress is not None and cache_task_id is not None:
                 progress.update(cache_task_id, advance=1)
 
-        if cache_dir is None or day in day_has_gaps:
+        if cache_dir is None:
+            _advance_cache_progress()
+            return
+
+        # A permanent-gap day (404 / decode-failure hours) is only committed
+        # once it is old enough that the gap is provably permanent. Younger gap
+        # days keep the original behaviour: leave the bi5 in place so the next
+        # run can retry, and write nothing.
+        is_partial = day in day_perm_gap
+        if is_partial and (today_utc - day).days < commit_partial_after_days:
             _advance_cache_progress()
             return
 
@@ -730,19 +811,26 @@ def export_range(
         bid_df = pd.concat(bid_frames).sort_index() if bid_frames else _empty
         ask_df = pd.concat(ask_frames).sort_index() if ask_frames else _empty
 
+        # A permanent-gap day with no decoded hours at all has nothing to
+        # commit; leave it untouched (404 hours wrote no bi5 anyway).
+        if is_partial and bid_df.empty and ask_df.empty:
+            _advance_cache_progress()
+            return
+
         # Scale-discontinuity sentry: refuse to write a daily candle
         # CSV whose median close diverges from the existing neighbour cache.
         # That class of mismatch is silent in backtests and produces order-of-
         # magnitude wrong PnL across the boundary.  Leave the bi5 files in
         # place so a subsequent retry with the correct --price-divisor can
-        # write the day cleanly.
+        # write the day cleanly. Scale-rejection dominates a permanent gap: such
+        # a day is recorded in day_scale_rejected and never partial-committed.
         if not bid_df.empty:
             new_median = float(bid_df["close"].median())
             ok, reason = check_scale_consistency(cache_dir, symbol, day, new_median)
             if not ok:
                 days_rejected_scale_sentry += 1
                 log.error(reason)
-                day_has_gaps.add(day)
+                day_scale_rejected.add(day)
                 _advance_cache_progress()
                 return
 
@@ -780,6 +868,19 @@ def export_range(
                 day_dir.rmdir()
             except OSError:
                 pass  # Not empty or already gone; that's fine
+
+        # Record the partial commit so downstream data-quality checks can tell a
+        # known-permanent gap from a complete day.
+        if is_partial:
+            days_committed_partial += 1
+            missing = sorted(day_missing_hours.get(day, set()))
+            reasons = day_gap_reasons.get(day, set())
+            gap_reason = "+".join(sorted(reasons)) if reasons else "unknown"
+            _append_partial_day_manifest(cache_dir, symbol, day, missing, gap_reason)
+            log.info(
+                f"{symbol}: partial-committed {day.isoformat()} "
+                f"({len(missing)} permanent-gap hour(s): {missing}, reason={gap_reason})"
+            )
 
         _advance_cache_progress()
 
@@ -831,7 +932,7 @@ def export_range(
             # --- 404: no data for this hour ---
             if comp is None:
                 hours_missing_404 += 1
-                day_has_gaps.add(current_day)
+                _mark_perm_gap(current_day, current_hour.hour, "missing_404")
                 _advance_resample_progress()
                 if is_last_hour_of_day:
                     _flush_day(current_day)
@@ -887,7 +988,7 @@ def export_range(
                     _dukascopy_tick_url(symbol, current_hour), cache_path=cache_path
                 )
                 if comp2 is None:
-                    day_has_gaps.add(current_day)
+                    _mark_perm_gap(current_day, current_hour.hour, "decode_failed")
                     _advance_resample_progress()
                     if is_last_hour_of_day:
                         _flush_day(current_day)
@@ -903,7 +1004,7 @@ def export_range(
                 except Exception as e:
                     log.warning(f"corrupt hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
                     hours_decode_failed += 1
-                    day_has_gaps.add(current_day)
+                    _mark_perm_gap(current_day, current_hour.hour, "decode_failed")
                     _advance_resample_progress()
                     if is_last_hour_of_day:
                         _flush_day(current_day)
@@ -911,7 +1012,7 @@ def export_range(
             except Exception as e:
                 log.warning(f"skipping hour {_dukascopy_tick_url(symbol, current_hour)}: {e}")
                 hours_decode_failed += 1
-                day_has_gaps.add(current_day)
+                _mark_perm_gap(current_day, current_hour.hour, "decode_failed")
                 _advance_resample_progress()
                 if is_last_hour_of_day:
                     _flush_day(current_day)
@@ -970,7 +1071,8 @@ def export_range(
         f"decode_failed={hours_decode_failed}, "
         f"resampled_nonempty={hours_resampled_nonempty}, "
         f"loaded_from_cache={hours_loaded_from_cache}, "
-        f"days_rejected_scale_sentry={days_rejected_scale_sentry}"
+        f"days_rejected_scale_sentry={days_rejected_scale_sentry}, "
+        f"days_committed_partial={days_committed_partial}"
     )
 
     if resample_rule is None:

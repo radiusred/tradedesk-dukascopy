@@ -133,11 +133,13 @@ def test_daily_candle_csvs_contain_data_from_all_hours(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Gap prevention: 404 hours stop daily candle CSVs being committed
+# Gap prevention: a 404 hour leaves a *below-threshold* day uncommitted
+# (the gap may still be transient, so the day is retried on the next run).
+# Aged-gap partial-commit behaviour is covered in test_export_partial_commit.py.
 # ---------------------------------------------------------------------------
 
 
-def test_daily_candle_csvs_not_written_when_day_has_404_hour(monkeypatch, tmp_path):
+def test_daily_candle_csvs_not_written_when_recent_day_has_404_hour(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
     out_dir = tmp_path / "out"
 
@@ -148,6 +150,8 @@ def test_daily_candle_csvs_not_written_when_day_has_404_hour(monkeypatch, tmp_pa
     # Hour 00 returns 404 (None).
     _patch_download_and_decode(monkeypatch, return_none_for_hour=start)
 
+    # A very large age threshold makes the day "too young" to partial-commit,
+    # so a 404 hour leaves the day uncommitted (the original retry behaviour).
     ex.export_range(
         symbol="EURUSD",
         start_utc=start,
@@ -157,12 +161,13 @@ def test_daily_candle_csvs_not_written_when_day_has_404_hour(monkeypatch, tmp_pa
         resample_rule="1min",
         cache_dir=cache_dir,
         probe=False,
+        commit_partial_after_days=100_000,
     )
 
     bid_csv = ex._daily_candle_path(cache_dir, "EURUSD", start.date(), "bid")
     ask_csv = ex._daily_candle_path(cache_dir, "EURUSD", start.date(), "ask")
-    assert not bid_csv.exists(), "bid candle CSV must NOT be written when a 404 hour exists"
-    assert not ask_csv.exists(), "ask candle CSV must NOT be written when a 404 hour exists"
+    assert not bid_csv.exists(), "bid candle CSV must NOT be written for a below-threshold 404 day"
+    assert not ask_csv.exists(), "ask candle CSV must NOT be written for a below-threshold 404 day"
 
 
 # ---------------------------------------------------------------------------
