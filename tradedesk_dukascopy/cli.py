@@ -93,6 +93,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max parallel instrument workers (default: 4)",
     )
     p.add_argument(
+        "--commit-partial-after-days",
+        type=int,
+        default=7,
+        help="Age (in UTC days) past which a day with permanent-gap hours "
+        "(404 / decode-failure) is committed from its available hours instead "
+        "of being left for retry; the day is recorded in the per-symbol "
+        "_partial_days.jsonl manifest. Use 0 to commit any permanent-gap day "
+        "immediately (orphan-cache backfill sweep). Default: 7",
+    )
+    p.add_argument(
         "--probe",
         action="store_true",
         help="Probe one hour and print decoded ticks; no files written.",
@@ -135,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     end_utc = _parse_ymd(args.date_to)
     if end_utc < start_utc:
         raise SystemExit("--to must be >= --from")
+    if args.commit_partial_after_days < 0:
+        raise SystemExit("--commit-partial-after-days must be >= 0")
 
     configure_logging(level=args.log_level.upper())
 
@@ -180,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
             price_divisor=args.price_divisor,
             cache_dir=cache_dir,
             out=out,
+            commit_partial_after_days=args.commit_partial_after_days,
         )
         for symbol in args.symbols
     ]

@@ -33,6 +33,7 @@ class ExportTask:
     price_divisor: float
     cache_dir: Path | None
     out: Path
+    commit_partial_after_days: int = 7
 
 
 @dataclass
@@ -59,6 +60,7 @@ def _export_worker(task: ExportTask, progress: Progress | None = None) -> Export
             cache_dir=task.cache_dir,
             probe=False,
             probe_ticks=0,
+            commit_partial_after_days=task.commit_partial_after_days,
             out=task.out,
             progress=progress,
         )
