@@ -236,6 +236,12 @@ When run, the tool will fetch new or missing raw data files from Dukascopy for t
 
 Dukascopy downloads are notoriously slow and unreliable due to rate limiting and limited resources available for their service. This tool has multiple strategies to address and work around those limitations, including retaining the raw files until a full daily file of CSV data can be written. Re-running the same `tradedesk-dc-export` is both safe and efficient - it will only attempt to fill in gaps and will finish very quickly where downloads or conversions are already cached.
 
+Re-export also self-heals: if a previous run was interrupted after writing a
+day's bid+ask candle CSVs but before deleting the underlying `.bi5` directory,
+the next `tradedesk-dc-export` for that range removes the redundant day-dir
+before its all-cached early-exit check. The candle CSVs are left byte-for-byte
+intact, and there is no leftover state to confuse downstream consumers.
+
 For this to work well though, you should treat the cache directory as a permanent, not a transient store of local market data that can be added to over time. Best practice is to **always** specify a `--cache-dir` that points to your common market data trove wherever you use the tool from.
 
 ### Concurrency and Dukascopy reliability
@@ -248,6 +254,37 @@ Dukascopy becomes unreliable when too many requests are in flight. If you want
 to stay near the safest limit of two concurrent download threads, keep
 `--workers 1`. Re-running the same command is idempotent and is the intended way
 to fill cache gaps caused by failed hours.
+
+### Committing days with permanent gaps (`--commit-partial-after-days`)
+
+Some historical Dukascopy hours never return tick data — they 404 or hand back
+a payload the decoder cannot parse, no matter how many times the export is
+re-run. Without intervention those days stay forever uncommitted: their
+candles are never written, the raw `.bi5` files stay stranded on disk, and any
+downstream backtest that touches the symbol can refuse to load.
+
+`--commit-partial-after-days N` lets the exporter commit such a day from the
+hours that *did* decode once the day is older than `N` days (default `7`).
+Younger gap days still get the original "leave the bi5 in place and retry
+next run" treatment.
+
+```bash
+tradedesk-dc-export --symbols LIGHTCMDUSD \
+  --from 2022-01-01 --to 2022-12-31 \
+  --out data --cache-dir ./cache \
+  --price-divisor 1000 --workers 1 \
+  --commit-partial-after-days 7
+```
+
+Each partial-commit decision is recorded in a per-symbol append-only
+`_partial_days.jsonl` manifest under the cache directory
+(`{day, missing_hours, gap_reason, committed_at}`). The candle CSV schema is
+unchanged. Use `--commit-partial-after-days 0` to commit immediately — useful
+for one-off backfill sweeps that target known-old orphaned day-dirs.
+
+Days flagged by the write-time scale-discontinuity sentry (see below) are
+**never** partial-committed regardless of age. Re-run them with the matching
+`--price-divisor` instead.
 
 ### Resampled CSV using `--out`
 
