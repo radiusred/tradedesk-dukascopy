@@ -10,6 +10,16 @@ from rich.logging import RichHandler
 from .export import export_range
 from .metadata import ExportMetadata, now_iso_utc, write_sidecar
 
+# Map CLI --log-level choices that are not valid stdlib `logging` level names
+# onto their stdlib equivalents.
+_LOG_LEVEL_ALIASES = {"FATAL": "CRITICAL", "TRACE": "DEBUG"}
+
+
+def _resolve_log_level(level: str) -> str:
+    """Resolve a CLI --log-level value to a stdlib `logging` level name."""
+    upper = level.upper()
+    return _LOG_LEVEL_ALIASES.get(upper, upper)
+
 
 def configure_logging(level: str = "INFO") -> None:
     """
@@ -17,7 +27,7 @@ def configure_logging(level: str = "INFO") -> None:
     Uses RichHandler if TTY, plain StreamHandler otherwise.
     """
     root_logger = logging.getLogger()
-    root_logger.setLevel(level.upper())
+    root_logger.setLevel(_resolve_log_level(level))
     root_logger.handlers.clear()
     handler: logging.Handler
 
@@ -148,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.commit_partial_after_days < 0:
         raise SystemExit("--commit-partial-after-days must be >= 0")
 
-    configure_logging(level=args.log_level.upper())
+    configure_logging(level=args.log_level)
 
     # Determine worker count
     workers = max(1, args.workers)

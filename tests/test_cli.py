@@ -1,9 +1,24 @@
+import logging
 from datetime import UTC
 from pathlib import Path
 
 import tradedesk_dukascopy.cli as cli
 import tradedesk_dukascopy.parallel as par
 from tradedesk_dukascopy.parallel import ExportResult
+
+
+def test_configure_logging_maps_fatal_to_critical() -> None:
+    # logging.setLevel("FATAL") happens to work on CPython but the CLI choice
+    # is intentionally translated to the canonical stdlib name CRITICAL.
+    cli.configure_logging(level="fatal")
+    assert logging.getLogger().level == logging.CRITICAL
+
+
+def test_configure_logging_maps_trace_to_debug() -> None:
+    # "TRACE" is not a stdlib logging level; setLevel("TRACE") raises ValueError.
+    # The CLI maps trace -> DEBUG so the choice is usable.
+    cli.configure_logging(level="trace")
+    assert logging.getLogger().level == logging.DEBUG
 
 
 def test_parse_ymd_sets_utc_timezone() -> None:

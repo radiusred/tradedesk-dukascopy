@@ -59,6 +59,12 @@ RETRY_BACKOFF_FACTOR = 2.5
 # Download parallelisation
 DOWNLOAD_THREADS_PER_INSTRUMENT = 2
 
+# Dukascopy .bi5 tick record layout: 20 bytes per tick (>i f f f f or >i i i f f).
+_TICK_RECORD_SIZE = 20
+# Minimum decompressed-source bi5 payload to consider non-junk; tiny non-zero
+# payloads are treated as "no data" for the hour.
+_MIN_PAYLOAD_BYTES = 64
+
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": UA})
 
@@ -157,7 +163,7 @@ def _download_bi5(
                 return b""
 
             # Tiny non-zero payloads are usually junk/edge; keep existing behavior.
-            if len(data) < 64:
+            if len(data) < _MIN_PAYLOAD_BYTES:
                 log.debug("tiny bi5 payload (%d bytes) for %s; treating as no data", len(data), url)
                 if cache_path is not None:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,9 +204,9 @@ def _probe_price_format(compressed: bytes) -> str:
     """
     try:
         with lzma.open(io.BytesIO(compressed), "rb") as f:
-            first = f.read(20)
+            first = f.read(_TICK_RECORD_SIZE)
 
-        if len(first) < 20:
+        if len(first) < _TICK_RECORD_SIZE:
             raise ValueError("bi5 too short to probe")
 
     except EOFError as e:
@@ -220,8 +226,8 @@ def _probe_price_format(compressed: bytes) -> str:
 
 
 def _read_n_tick_records(compressed: bytes, n: int) -> bytes:
-    # Stream-decompress just enough to read n tick records (20 bytes each).
-    need = 20 * n
+    # Stream-decompress just enough to read n tick records.
+    need = _TICK_RECORD_SIZE * n
     with lzma.open(io.BytesIO(compressed), "rb") as f:
         return f.read(need)
 
@@ -242,14 +248,16 @@ def _decode_ticks(
     Endianness: big-endian is commonly used in bi5 decoders.
     """
     raw = lzma.decompress(compressed)
-    if len(raw) % 20 != 0:
-        raise ValueError(f"Unexpected bi5 payload length: {len(raw)} (not multiple of 20)")
+    if len(raw) % _TICK_RECORD_SIZE != 0:
+        raise ValueError(
+            f"Unexpected bi5 payload length: {len(raw)} (not multiple of {_TICK_RECORD_SIZE})"
+        )
 
     ticks: list[Tick] = []
 
     if price_format == "float":
         unpack = struct.Struct(">i f f f f").unpack_from
-        for i in range(0, len(raw), 20):
+        for i in range(0, len(raw), _TICK_RECORD_SIZE):
             ms, ask, bid, ask_vol, bid_vol = unpack(raw, i)
             ts = hour_start + timedelta(milliseconds=int(ms))
             ticks.append(
@@ -266,7 +274,7 @@ def _decode_ticks(
     if price_format == "int":
         div = float(price_divisor or 1.0)
         unpack = struct.Struct(">i i i f f").unpack_from  # ask,bid as int32
-        for i in range(0, len(raw), 20):
+        for i in range(0, len(raw), _TICK_RECORD_SIZE):
             ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw, i)
             ts = hour_start + timedelta(milliseconds=int(ms))
             ticks.append(
@@ -351,14 +359,14 @@ def _probe(
         print(f"{symbol}: detected tick price format = {detected_format}")
         raw20 = _read_n_tick_records(comp, max(1, probe_ticks))
 
-        if len(raw20) < 20:
+        if len(raw20) < _TICK_RECORD_SIZE:
             print(f"{symbol}: probe failed (not enough decompressed bytes)")
             continue
 
         if detected_format == "float":
             unpack = struct.Struct(">i f f f f").unpack_from
             print(f"{symbol} @ {hour.isoformat()} (float): first {probe_ticks} ticks")
-            for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
+            for i in range(0, min(len(raw20), _TICK_RECORD_SIZE * probe_ticks), _TICK_RECORD_SIZE):
                 ms, ask, bid, ask_vol, bid_vol = unpack(raw20, i)
                 ts = hour + timedelta(milliseconds=int(ms))
                 print(ts.isoformat(), "bid", bid, "ask", ask, "bid_vol", bid_vol)
@@ -367,7 +375,7 @@ def _probe(
             print(f"{symbol} @ {hour.isoformat()} (int): first {probe_ticks} ticks")
             divisors = [1, 10, 100, 1000, 10000, 100000]
             rows = []
-            for i in range(0, min(len(raw20), 20 * probe_ticks), 20):
+            for i in range(0, min(len(raw20), _TICK_RECORD_SIZE * probe_ticks), _TICK_RECORD_SIZE):
                 ms, ask_i, bid_i, ask_vol, bid_vol = unpack(raw20, i)
                 ts = hour + timedelta(milliseconds=int(ms))
                 rows.append((ts, bid_i, ask_i, bid_vol))
