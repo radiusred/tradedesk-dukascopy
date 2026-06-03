@@ -286,6 +286,24 @@ Days flagged by the write-time scale-discontinuity sentry (see below) are
 **never** partial-committed regardless of age. Re-run them with the matching
 `--price-divisor` instead.
 
+### Logging verbosity (`--log-level`)
+
+`--log-level` controls how much the exporter prints (default `info`). Accepted
+values, from quietest to noisiest, are `fatal`, `error`, `warn`, `info`,
+`debug`, and `trace`. `fatal` and `trace` are convenience aliases mapped onto
+the standard library's `CRITICAL` and `DEBUG` levels, so `trace` behaves
+identically to `debug` rather than erroring out.
+
+```bash
+tradedesk-dc-export --symbols EURUSD \
+  --from 2025-01-01 --to 2025-01-31 \
+  --out data --cache-dir ./cache --workers 1 \
+  --log-level debug
+```
+
+Use `--log-level debug` (or `trace`) when diagnosing slow or failing Dukascopy
+hours — the extra detail surfaces per-hour fetch and decode decisions.
+
 ### Resampled CSV using `--out`
 
 If you resample to an `--out` location, the tool writes separate bid and ask
