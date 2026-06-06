@@ -410,7 +410,25 @@ def _daily_candle_path(cache_dir: Path, symbol: str, day: date, side: str) -> Pa
     )
 
 
-def _cleanup_stale_day_dirs(cache_dir: Path, symbol: str) -> None:
+def _parse_cache_day(year_name: str, month0_name: str, day_name: str) -> date | None:
+    """Parse a cache ``YYYY/MM/DD`` dir triple (MM zero-based) into a ``date``.
+
+    Returns ``None`` if any component is non-numeric or out of range (e.g. a
+    stray non-cache directory), so callers can skip it without raising.
+    """
+    try:
+        return date(int(year_name), int(month0_name) + 1, int(day_name))
+    except ValueError:
+        return None
+
+
+def _cleanup_stale_day_dirs(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    today: date | None = None,
+    commit_partial_after_days: int = 7,
+) -> None:
     """Remove leftover ``.bi5`` day directories that are redundant or empty.
 
     A day directory (``{symbol}/YYYY/MM/DD/``) holds the raw hourly ``.bi5``
@@ -419,8 +437,10 @@ def _cleanup_stale_day_dirs(cache_dir: Path, symbol: str) -> None:
     siblings in the month directory) exist. We remove a day directory when:
 
       - it is **empty** (the normal post-flush state where every ``.bi5`` was
-        already deleted but the ``rmdir`` never ran), or
-      - it is **non-empty but both candle CSVs for that day already exist**.
+        already deleted but the ``rmdir`` never ran),
+      - it is **non-empty but both candle CSVs for that day already exist**, or
+      - **every staged ``.bi5`` is 0 bytes** (a market-closed / no-tick day) and
+        the day is older than ``commit_partial_after_days``.
 
     The second case self-heals a run that wrote the candle CSVs but was
     interrupted before deleting (all of) its ``.bi5``. Without this, the day is
@@ -431,9 +451,22 @@ def _cleanup_stale_day_dirs(cache_dir: Path, symbol: str) -> None:
     "re-run tradedesk-dc-export" remediation). The raw ``.bi5`` are losslessly
     reproducible, so removing them once candles exist is safe.
 
-    Day directories with leftover ``.bi5`` but **no** complete candle pair are
-    left untouched so a subsequent run can still finish committing the day.
+    The third case (RAD-3771) covers weekend / market-holiday days where every
+    fetched hour returned no ticks: each ``.bi5`` is written as a 0-byte file, so
+    the day decodes to nothing and **no** candle CSV is ever produced — yet the
+    staging dir lingers and trips ``_check_old_format`` on every backtest
+    touching the day. The 0-byte ``.bi5`` carry no recoverable data and are
+    losslessly reproducible, and leaving the dir makes ``export_range`` treat the
+    day as cached and skip the re-download that would refill it, so removal is
+    strictly safe. It is age-gated like a partial commit so a same-day in-flight
+    export (early empty hours staged before ticks arrive) is left alone.
+
+    Day directories with leftover **non-empty** ``.bi5`` but no complete candle
+    pair are left untouched so a subsequent run can still finish committing the
+    day.
     """
+    if today is None:
+        today = datetime.now(UTC).date()
     sym_dir = cache_dir / symbol
     if not sym_dir.is_dir():
         return
@@ -446,14 +479,15 @@ def _cleanup_stale_day_dirs(cache_dir: Path, symbol: str) -> None:
             for day_dir in month_dir.iterdir():
                 if not day_dir.is_dir():
                     continue
-                if not any(day_dir.iterdir()):
+                day_files = list(day_dir.iterdir())
+                if not day_files:
                     try:
                         day_dir.rmdir()
                     except OSError:
                         pass
                     continue
-                # Non-empty: only remove if both daily-candle CSVs exist, in
-                # which case the leftover .bi5 are redundant and removable.
+                # Non-empty: remove if both daily-candle CSVs exist, in which
+                # case the leftover .bi5 are redundant and removable.
                 bid_csv = month_dir / f"{day_dir.name}_bid.csv.zst"
                 ask_csv = month_dir / f"{day_dir.name}_ask.csv.zst"
                 if bid_csv.exists() and ask_csv.exists():
@@ -463,6 +497,24 @@ def _cleanup_stale_day_dirs(cache_dir: Path, symbol: str) -> None:
                         log.warning(
                             "%s: could not remove redundant bi5 day-dir %s", symbol, day_dir
                         )
+                    continue
+                # All-empty .bi5 staging (RAD-3771): no decodable ticks, so the
+                # day will never produce a candle. Remove once aged past the
+                # partial-commit window so a same-day export is not disturbed.
+                bi5_files = [f for f in day_files if f.suffix == ".bi5"]
+                if (
+                    bi5_files
+                    and len(bi5_files) == len(day_files)
+                    and all(f.stat().st_size == 0 for f in bi5_files)
+                ):
+                    day = _parse_cache_day(year_dir.name, month_dir.name, day_dir.name)
+                    if day is None or (today - day).days >= commit_partial_after_days:
+                        try:
+                            shutil.rmtree(day_dir)
+                        except OSError:
+                            log.warning(
+                                "%s: could not remove empty-bi5 day-dir %s", symbol, day_dir
+                            )
 
 
 # Backwards-compatible alias: this function historically only pruned empty
@@ -660,7 +712,12 @@ def export_range(
             ask_path = _daily_candle_path(cache_dir, symbol, day, "ask")
             if bid_path.exists() and ask_path.exists():
                 days_fully_cached.add(day)
-        _cleanup_stale_day_dirs(cache_dir, symbol)
+        _cleanup_stale_day_dirs(
+            cache_dir,
+            symbol,
+            today=today_utc,
+            commit_partial_after_days=commit_partial_after_days,
+        )
 
     # Early exit: if every day is cached there may be nothing to (re)generate.
     if cache_dir is not None and unique_days and days_fully_cached == unique_days:
