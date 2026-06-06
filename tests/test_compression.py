@@ -147,6 +147,60 @@ def test_cleanup_preserves_bi5_dir_when_only_one_candle_csv_exists(tmp_path: Pat
     assert leftover_dir.exists(), "bi5 day-dir must be kept when the candle pair is incomplete"
 
 
+def test_cleanup_removes_all_empty_bi5_dir_when_aged(tmp_path: Path) -> None:
+    # RAD-3771: a market-closed / no-tick day stages only 0-byte .bi5 (every
+    # hour returned no ticks), so no candle CSV is ever produced. Once aged past
+    # the partial-commit window the staging dir is pure cruft and must be swept,
+    # else it trips the consumer's _check_old_format guard forever.
+    from datetime import date
+
+    symbol = "EURUSD"
+    leftover_dir = tmp_path / symbol / "2005" / "01" / "25"  # 2005-02-25 (MM zero-based)
+    leftover_dir.mkdir(parents=True)
+    (leftover_dir / "22h_ticks.bi5").write_bytes(b"")
+    (leftover_dir / "23h_ticks.bi5").write_bytes(b"")
+    # No candle CSVs exist for this day.
+
+    ex._cleanup_stale_day_dirs(tmp_path, symbol, today=date(2026, 6, 6))
+
+    assert not leftover_dir.exists(), "aged all-empty bi5 day-dir must be swept"
+
+
+def test_cleanup_preserves_recent_all_empty_bi5_dir(tmp_path: Path) -> None:
+    # RAD-3771: an all-empty staging dir younger than the partial-commit window
+    # may belong to a same-day in-flight export (early empty hours staged before
+    # ticks arrive), so it is left alone.
+    from datetime import date
+
+    symbol = "EURUSD"
+    recent_dir = tmp_path / symbol / "2026" / "05" / "05"  # 2026-06-05
+    recent_dir.mkdir(parents=True)
+    (recent_dir / "00h_ticks.bi5").write_bytes(b"")
+
+    ex._cleanup_stale_day_dirs(
+        tmp_path, symbol, today=date(2026, 6, 6), commit_partial_after_days=7
+    )
+
+    assert recent_dir.exists(), "recent all-empty bi5 day-dir must be kept for in-flight export"
+
+
+def test_cleanup_preserves_dir_with_nonempty_bi5_and_no_candles(tmp_path: Path) -> None:
+    # RAD-3771: a dir that still holds *non-empty* .bi5 (real pending tick data)
+    # with no candle pair is a genuine partial — never swept by the all-empty
+    # rule, even when aged.
+    from datetime import date
+
+    symbol = "GBPCAD"
+    pending_dir = tmp_path / symbol / "2026" / "03" / "07"  # 2026-04-07
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "08h_ticks.bi5").write_bytes(b"")
+    (pending_dir / "09h_ticks.bi5").write_bytes(b"real-ticks")  # one non-empty
+
+    ex._cleanup_stale_day_dirs(tmp_path, symbol, today=date(2026, 6, 6))
+
+    assert pending_dir.exists(), "dir with any non-empty bi5 must be preserved"
+
+
 def test_cleanup_is_noop_for_missing_symbol_dir(tmp_path: Path) -> None:
     # Should not raise even if symbol dir doesn't exist
     ex._cleanup_empty_day_dirs(tmp_path, "GBPUSD")
