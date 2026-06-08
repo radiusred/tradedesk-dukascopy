@@ -236,11 +236,23 @@ When run, the tool will fetch new or missing raw data files from Dukascopy for t
 
 Dukascopy downloads are notoriously slow and unreliable due to rate limiting and limited resources available for their service. This tool has multiple strategies to address and work around those limitations, including retaining the raw files until a full daily file of CSV data can be written. Re-running the same `tradedesk-dc-export` is both safe and efficient - it will only attempt to fill in gaps and will finish very quickly where downloads or conversions are already cached.
 
-Re-export also self-heals: if a previous run was interrupted after writing a
-day's bid+ask candle CSVs but before deleting the underlying `.bi5` directory,
-the next `tradedesk-dc-export` for that range removes the redundant day-dir
-before its all-cached early-exit check. The candle CSVs are left byte-for-byte
-intact, and there is no leftover state to confuse downstream consumers.
+Re-export also self-heals stranded raw-tick day-dirs before its all-cached
+early-exit check, in three cases:
+
+1. **Empty day-dirs** — a directory left behind with no staged files.
+2. **Already-committed day-dirs** — a run was interrupted after writing a day's
+   bid+ask candle CSVs but before deleting the underlying `.bi5` directory; the
+   redundant day-dir is removed and the candle CSVs are left byte-for-byte intact.
+3. **All-empty 0-byte `.bi5` day-dirs** — a market-closed day (weekend, holiday,
+   or Friday late-close hours) where every fetched hour returned no ticks, so no
+   candle CSV is ever written but the staging dir lingers and would trip a
+   downstream consumer's old-format guard. These empty `.bi5` carry no
+   recoverable data and are losslessly reproducible, so the dir is removed. This
+   branch is **age-gated by `--commit-partial-after-days`** (see below) so a
+   same-day in-flight export — whose early empty hours are staged before ticks
+   arrive — is left alone.
+
+In every case there is no leftover state to confuse downstream consumers.
 
 For this to work well though, you should treat the cache directory as a permanent, not a transient store of local market data that can be added to over time. Best practice is to **always** specify a `--cache-dir` that points to your common market data trove wherever you use the tool from.
 
