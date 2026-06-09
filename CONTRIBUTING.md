@@ -23,6 +23,15 @@ Or with [`uv`](https://docs.astral.sh/uv/):
 uv sync --extra dev
 ```
 
+### Optional: MCP / code-summary tooling
+
+`llm-tldr` is not a runtime dependency and is not installed by default.
+If you use the MCP code-summary tool, install it separately:
+
+```bash
+uv sync --extra tooling
+```
+
 ## Code Standards
 
 ### Python Version

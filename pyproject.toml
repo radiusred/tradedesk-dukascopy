@@ -27,7 +27,6 @@ dependencies = [
     "pandas>=2.2",
     "pandas-stubs>=2.2.0",
     "rich>=14.2",
-    "llm-tldr[dev]>=1.5.2",
     "mypy>=1.19.1",
     "ruff>=0.15.2",
     "zstandard>=0.25.0",
@@ -42,6 +41,7 @@ dev = [
     "pytest-cov>=7.0",
 ]
 parquet = ["pyarrow>=16.1"]
+tooling = ["llm-tldr[dev]>=1.5.2"]
 
 [project.scripts]
 tradedesk-dc-export = "tradedesk_dukascopy.cli:main"
