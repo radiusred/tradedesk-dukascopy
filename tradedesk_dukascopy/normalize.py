@@ -32,13 +32,15 @@ inside the expected range are left untouched.
 
 from __future__ import annotations
 
-import io
 import logging
 import math
 from pathlib import Path
 
 import pandas as pd
-import zstandard as zstd
+
+# Re-exported under the historical private names for backward compatibility.
+from ._zstio import read_zst as _read_zst
+from ._zstio import write_zst as _write_zst
 
 log = logging.getLogger(__name__)
 
@@ -218,37 +220,6 @@ def infer_price_divisor(
     if factor >= 1.0:
         return 1.0
     return 1.0 / factor
-
-
-# ---------------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------------
-
-
-def _read_zst(path: Path) -> pd.DataFrame | None:
-    """Read a Zstandard-compressed CSV into a DataFrame.  Returns None on error."""
-    try:
-        dctx = zstd.ZstdDecompressor()
-        with open(path, "rb") as f_in:
-            with dctx.stream_reader(f_in) as reader:
-                df = pd.read_csv(
-                    io.TextIOWrapper(io.BufferedReader(reader), encoding="utf-8")
-                )
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return df.set_index("timestamp")
-    except Exception:
-        return None
-
-
-def _write_zst(df: pd.DataFrame, path: Path) -> None:
-    """Atomically write *df* as a Zstandard-compressed CSV to *path*."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    out = df.copy()
-    out.index.name = "timestamp"
-    cctx = zstd.ZstdCompressor(level=3)
-    compressed = cctx.compress(out.reset_index().to_csv(index=False).encode("utf-8"))
-    tmp.write_bytes(compressed)
-    tmp.replace(path)
 
 
 # ---------------------------------------------------------------------------

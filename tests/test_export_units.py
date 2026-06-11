@@ -75,7 +75,6 @@ def test_export_range_probe_exits_after_first_successful_hour(
         start_utc=start,
         end_utc_inclusive=end_incl,
         out=tmp_path,
-        price_side="bid",
         price_divisor=1000.0,
         resample_rule="5min",
         cache_dir=None,

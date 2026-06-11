@@ -451,7 +451,7 @@ def _cleanup_stale_day_dirs(
     "re-run tradedesk-dc-export" remediation). The raw ``.bi5`` are losslessly
     reproducible, so removing them once candles exist is safe.
 
-    The third case (RAD-3771) covers weekend / market-holiday days where every
+    The third case covers weekend / market-holiday days where every
     fetched hour returned no ticks: each ``.bi5`` is written as a 0-byte file, so
     the day decodes to nothing and **no** candle CSV is ever produced — yet the
     staging dir lingers and trips ``_check_old_format`` on every backtest
@@ -498,7 +498,7 @@ def _cleanup_stale_day_dirs(
                             "%s: could not remove redundant bi5 day-dir %s", symbol, day_dir
                         )
                     continue
-                # All-empty .bi5 staging (RAD-3771): no decodable ticks, so the
+                # All-empty .bi5 staging: no decodable ticks, so the
                 # day will never produce a candle. Remove once aged past the
                 # partial-commit window so a same-day export is not disturbed.
                 bi5_files = [f for f in day_files if f.suffix == ".bi5"]
@@ -518,7 +518,7 @@ def _cleanup_stale_day_dirs(
 
 
 # Backwards-compatible alias: this function historically only pruned empty
-# directories; it now also self-heals redundant non-empty ones (RAD-3015).
+# directories; it now also self-heals redundant non-empty ones.
 _cleanup_empty_day_dirs = _cleanup_stale_day_dirs
 
 
@@ -602,7 +602,6 @@ def export_range(
     start_utc: datetime,
     end_utc_inclusive: datetime,
     out: Path,
-    price_side: str = "bid",
     price_divisor: float = 1.0,
     resample_rule: str | None,
     cache_dir: Path | None,
@@ -702,7 +701,7 @@ def export_range(
     # Pre-check: identify days where daily 1-min candle CSVs already exist.
     # Those days skip .bi5 download and decode entirely.
     # Prune leftover bi5 day-dirs (empty, or redundant where candle CSVs exist)
-    # so a re-export self-heals dirs interrupted mid-deletion (RAD-3015).
+    # so a re-export self-heals dirs interrupted mid-deletion.
     days_fully_cached: set[date] = set()
     unique_days: set[date] = set()
     if cache_dir is not None:
@@ -1102,7 +1101,7 @@ def export_range(
 
             _advance_resample_progress()
 
-            if (current_hour.hour % 24 == 0) and progress is None:
+            if current_hour.hour == 0 and progress is None:
                 log.info(f"{symbol}: processed up to {current_hour.isoformat()}")
 
             if is_last_hour_of_day:

@@ -153,7 +153,7 @@ def test_expected_price_range_fx4() -> None:
 
 
 def test_expected_price_range_fx4_upper_excludes_10x_drift() -> None:
-    # Regression for RAD-2761: NZDUSD stored at 5.87 (10× too high) must
+    # Regression: NZDUSD stored at 5.87 (10× too high) must
     # fall OUTSIDE the standard FX band so normalize flags it.  An upper
     # bound of 15.0 was too lax — 5.87 was admitted and the file was left
     # alone.  A tighter upper of 5.0 still admits every major non-JPY/
@@ -164,7 +164,7 @@ def test_expected_price_range_fx4_upper_excludes_10x_drift() -> None:
 
 
 def test_infer_factor_nzdusd_10x_too_large_divides_by_10() -> None:
-    # RAD-2761: NZDUSD median 5.87 must collapse to 0.587 (factor 0.1).
+    # NZDUSD median 5.87 must collapse to 0.587 (factor 0.1).
     lo, hi = _expected_price_range("NZDUSD")
     assert infer_correction_factor(5.87, lo, hi) == pytest.approx(0.1)
 

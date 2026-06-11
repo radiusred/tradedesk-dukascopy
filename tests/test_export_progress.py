@@ -60,7 +60,6 @@ def test_export_range_reports_download_and_resample_progress(tmp_path, monkeypat
         start_utc=start,
         end_utc_inclusive=start,
         out=out_dir,
-        price_side="bid",
         price_divisor=1.0,
         resample_rule="5min",
         cache_dir=None,
