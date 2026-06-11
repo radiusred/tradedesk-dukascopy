@@ -25,7 +25,7 @@ def test_write_sidecar_writes_expected_json(tmp_path: Path) -> None:
         generated_at="2026-01-03T00:00:00Z",
         params={
             "resample": "5min",
-            "side": "bid",
+            "price_side": "bid",
             "date_from": "2025-01-01",
             "date_to": "2025-01-02",
         },

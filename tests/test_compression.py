@@ -110,7 +110,7 @@ def test_cleanup_removes_empty_day_dirs(tmp_path: Path) -> None:
 
 
 def test_cleanup_removes_redundant_bi5_dir_when_candle_csvs_exist(tmp_path: Path) -> None:
-    # RAD-3015: a non-empty bi5 day-dir is removed when both daily-candle CSVs
+    # A non-empty bi5 day-dir is removed when both daily-candle CSVs
     # for that day exist (the .bi5 are redundant once candles are written).
     symbol = "EURUSD"
     leftover_dir = tmp_path / symbol / "2025" / "00" / "15"
@@ -132,7 +132,7 @@ def test_cleanup_removes_redundant_bi5_dir_when_candle_csvs_exist(tmp_path: Path
 
 
 def test_cleanup_preserves_bi5_dir_when_only_one_candle_csv_exists(tmp_path: Path) -> None:
-    # RAD-3015: a partial candle pair (only bid written) is NOT a complete day,
+    # A partial candle pair (only bid written) is NOT a complete day,
     # so the bi5 must be kept for a retry to finish committing it.
     symbol = "EURUSD"
     leftover_dir = tmp_path / symbol / "2025" / "00" / "15"
@@ -148,7 +148,7 @@ def test_cleanup_preserves_bi5_dir_when_only_one_candle_csv_exists(tmp_path: Pat
 
 
 def test_cleanup_removes_all_empty_bi5_dir_when_aged(tmp_path: Path) -> None:
-    # RAD-3771: a market-closed / no-tick day stages only 0-byte .bi5 (every
+    # A market-closed / no-tick day stages only 0-byte .bi5 (every
     # hour returned no ticks), so no candle CSV is ever produced. Once aged past
     # the partial-commit window the staging dir is pure cruft and must be swept,
     # else it trips the consumer's _check_old_format guard forever.
@@ -167,7 +167,7 @@ def test_cleanup_removes_all_empty_bi5_dir_when_aged(tmp_path: Path) -> None:
 
 
 def test_cleanup_preserves_recent_all_empty_bi5_dir(tmp_path: Path) -> None:
-    # RAD-3771: an all-empty staging dir younger than the partial-commit window
+    # An all-empty staging dir younger than the partial-commit window
     # may belong to a same-day in-flight export (early empty hours staged before
     # ticks arrive), so it is left alone.
     from datetime import date
@@ -185,7 +185,7 @@ def test_cleanup_preserves_recent_all_empty_bi5_dir(tmp_path: Path) -> None:
 
 
 def test_cleanup_preserves_dir_with_nonempty_bi5_and_no_candles(tmp_path: Path) -> None:
-    # RAD-3771: a dir that still holds *non-empty* .bi5 (real pending tick data)
+    # A dir that still holds *non-empty* .bi5 (real pending tick data)
     # with no candle pair is a genuine partial — never swept by the all-empty
     # rule, even when aged.
     from datetime import date

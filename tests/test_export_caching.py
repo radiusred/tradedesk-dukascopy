@@ -289,11 +289,11 @@ def test_early_exit_returns_none_tuple_when_no_resample_and_all_cached(monkeypat
 
 
 def test_reexport_self_heals_leftover_bi5_dir_for_cached_day(monkeypatch, tmp_path):
-    """RAD-3015: a fully-cached day whose .bi5 dir was left behind (export
-    interrupted before bi5 deletion) is self-healed on re-export — the bi5 dir
-    is removed and the daily-candle CSVs are left untouched. Before this fix the
-    day was skipped as fully-cached and the leftover .bi5 dir was permanent,
-    tripping the consumer's _check_old_format guard (see RAD-3009)."""
+    """A fully-cached day whose .bi5 dir was left behind (export interrupted
+    before bi5 deletion) is self-healed on re-export — the bi5 dir is removed
+    and the daily-candle CSVs are left untouched. Before this fix the day was
+    skipped as fully-cached and the leftover .bi5 dir was permanent, tripping
+    the consumer's _check_old_format guard."""
     cache_dir = tmp_path / "cache"
     out_dir = tmp_path / "out"
 

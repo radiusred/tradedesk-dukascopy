@@ -17,40 +17,18 @@ left alone; the operator must delete and re-export those.
 
 from __future__ import annotations
 
-import io
 import logging
 import math
 import statistics
 from pathlib import Path
 
-import pandas as pd
-import zstandard as zstd
+from ._zstio import read_zst as _read_zst
+from ._zstio import write_zst as _write_zst
 
 log = logging.getLogger(__name__)
 
 _PRICE_COLS = ("open", "high", "low", "close")
 _FACTOR_CANDIDATES = (1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1e1, 1e2, 1e3, 1e4)
-
-
-def _read_zst(path: Path) -> pd.DataFrame | None:
-    try:
-        dctx = zstd.ZstdDecompressor()
-        with open(path, "rb") as f_in, dctx.stream_reader(f_in) as reader:
-            df = pd.read_csv(io.TextIOWrapper(io.BufferedReader(reader), encoding="utf-8"))
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return df.set_index("timestamp")
-    except (OSError, UnicodeDecodeError, ValueError, zstd.ZstdError, pd.errors.ParserError):
-        return None
-
-
-def _write_zst(df: pd.DataFrame, path: Path) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    out = df.copy()
-    out.index.name = "timestamp"
-    cctx = zstd.ZstdCompressor(level=3)
-    compressed = cctx.compress(out.reset_index().to_csv(index=False).encode("utf-8"))
-    tmp.write_bytes(compressed)
-    tmp.replace(path)
 
 
 def _iter_bid_files(sym_dir: Path):

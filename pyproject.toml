@@ -23,20 +23,18 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.32",
-    "types-requests>=2.32.0",
     "pandas>=2.2",
-    "pandas-stubs>=2.2.0",
     "rich>=14.2",
-    "mypy>=1.19.1",
-    "ruff>=0.15.2",
     "zstandard>=0.25.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pre-commit>=4.5",
-    "mypy>=1.19",
-    "ruff>=0.14",
+    "mypy>=1.19.1",
+    "ruff>=0.15.2",
+    "types-requests>=2.32.0",
+    "pandas-stubs>=2.2.0",
     "pytest>=9.0",
     "pytest-cov>=7.0",
 ]

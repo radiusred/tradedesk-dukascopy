@@ -77,6 +77,7 @@ tradedesk-dc-export --symbols GBPSEK \
 ```
 
 Probe mode prints sample ticks at different divisors without writing files.
+Use `--probe-ticks N` to control how many ticks are printed (default `10`).
 
 ```text
 GBPSEK: detected tick price format = int
@@ -234,6 +235,8 @@ your backtest runtime loop:
 
 When run, the tool will fetch new or missing raw data files from Dukascopy for the instrument(s) and periods that you specify. These are always compressed, hourly files. Once fetched, the files are converted to CSV format tick files and aggregated into daily files. When all 24 hour periods are available and the daily CSV file is written to the cache, the raw native files are discarded.
 
+`--cache-dir` defaults to `.cache/marketdata` (relative to the current working directory). Pass `--no-cache` to disable caching entirely and always re-download.
+
 Dukascopy downloads are notoriously slow and unreliable due to rate limiting and limited resources available for their service. This tool has multiple strategies to address and work around those limitations, including retaining the raw files until a full daily file of CSV data can be written. Re-running the same `tradedesk-dc-export` is both safe and efficient - it will only attempt to fill in gaps and will finish very quickly where downloads or conversions are already cached.
 
 Re-export also self-heals stranded raw-tick day-dirs before its all-cached
@@ -259,8 +262,8 @@ For this to work well though, you should treat the cache directory as a permanen
 ### Concurrency and Dukascopy reliability
 
 Each symbol export uses up to two downloader threads internally. `--workers`
-controls how many symbols are exported concurrently, so the total request
-concurrency can grow quickly.
+(default `4`) controls how many symbols are exported concurrently, so the total
+request concurrency can grow quickly.
 
 Dukascopy becomes unreliable when too many requests are in flight. If you want
 to stay near the safest limit of two concurrent download threads, keep

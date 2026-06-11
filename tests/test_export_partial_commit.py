@@ -1,5 +1,5 @@
 """
-Tests for age-gated partial-commit of permanent-gap days (RAD-3022).
+Tests for age-gated partial-commit of permanent-gap days.
 
 A day with a permanent-gap hour (404 / decode-failure) is committed from the
 hours that DID decode once it is older than ``commit_partial_after_days``;
